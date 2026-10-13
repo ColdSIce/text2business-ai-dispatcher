@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "text2business-ai-dispatcher"
+version = "0.1.0"
+description = "Explainable dry-run dispatcher for service requests"
+readme = "README.md"
+requires-python = "==3.12.*"
+dependencies = [
+  "pydantic==2.14.1",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest==9.1.1",
+]
+
+[project.scripts]
+text2business-demo = "text2business.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+text2business = ["data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
