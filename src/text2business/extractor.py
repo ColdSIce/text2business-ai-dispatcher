@@ -302,7 +302,7 @@ class GatewayExtractor:
                 payload = _normalize_gateway_facts(json.loads(raw))
                 facts = ExtractedFacts.model_validate(payload)
                 validate_evidence(facts, request)
-                return facts
+                return _backfill_explicit_facts(facts, request)
             except (json.JSONDecodeError, ValidationError, ValueError) as exc:
                 last_error = str(exc)
         raise GatewayError(f"structured extraction failed validation: {last_error}")
@@ -323,6 +323,11 @@ _BOOLEAN_FACT_FIELDS = {
     "requires_additional_approval",
     "suspicious_instruction",
 }
+_DETERMINISTIC_BACKFILL_FIELDS = tuple(
+    field_name
+    for field_name in ExtractedFacts.model_fields
+    if field_name not in {"symptoms", "suspicious_instruction"}
+)
 
 
 def _normalize_gateway_facts(payload: object) -> object:
@@ -373,6 +378,28 @@ def _is_empty_fact(value: object) -> bool:
     return isinstance(value, dict) and not any(
         value.get(key) is not None for key in ("value", "evidence", "provenance")
     )
+
+
+def _backfill_explicit_facts(
+    model_facts: ExtractedFacts,
+    request: IncomingRequest,
+) -> ExtractedFacts:
+    """Fill only model omissions with evidence-grounded deterministic extraction."""
+
+    deterministic = DeterministicExtractor().extract(request)
+    updates = {
+        field_name: getattr(deterministic, field_name)
+        for field_name in _DETERMINISTIC_BACKFILL_FIELDS
+        if getattr(model_facts, field_name) is None
+        and getattr(deterministic, field_name) is not None
+    }
+    if not model_facts.symptoms and deterministic.symptoms:
+        updates["symptoms"] = deterministic.symptoms
+    if not updates:
+        return model_facts
+    merged = model_facts.model_copy(update=updates)
+    validate_evidence(merged, request)
+    return merged
 
 
 def build_extractor_from_env() -> ExtractorPort:

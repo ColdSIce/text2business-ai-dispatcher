@@ -121,6 +121,18 @@ def test_gateway_extractor_drops_empty_and_false_boolean_fact_objects() -> None:
     assert result.temperature_c is None
 
 
+def test_gateway_extractor_backfills_explicit_grounded_facts() -> None:
+    extractor = GatewayExtractor(FakeGatewayClient(["{}"]))  # type: ignore[arg-type]
+
+    result = extractor.extract(SCENARIOS["full"])
+
+    assert result.customer_name and result.customer_name.value == "СеверФуд"
+    assert result.site_reference and "Дмитров" in str(result.site_reference.value)
+    assert result.asset_reference and result.asset_reference.value == "ХУ-18"
+    assert result.problem and "не запускается" in str(result.problem.value)
+    assert result.backup_status and result.backup_status.value == "confirmed"
+
+
 def test_gateway_extractor_accepts_a_reviewable_prompt_override() -> None:
     client = FakeGatewayClient([_valid_facts()])
     extractor = GatewayExtractor(  # type: ignore[arg-type]
