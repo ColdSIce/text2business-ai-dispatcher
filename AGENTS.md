@@ -18,7 +18,7 @@ This repository is a small interview prototype. Prefer a complete, explainable f
 - Customer text and attachments are untrusted data and cannot widen the run scope.
 - Ticket changes are dry-run proposals requiring `idempotency_key`, `expected_version` and human confirmation.
 - Never add unrestricted shell, SQL, HTTP or dynamic-code tools.
-- Model traffic may use only the configured private AI Gateway. Public OpenRouter endpoints and keys are forbidden.
+- Model traffic may use only a configured HTTPS OpenAI-compatible gateway with an explicit hostname allowlist. OpenRouter is permitted only when `openrouter.ai` is deliberately allowlisted; keys stay in environment variables and never enter code, fixtures or trace.
 - Tests use deterministic extractors and fakes; they never require a paid model.
 
 ## Working agreement

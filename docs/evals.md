@@ -5,7 +5,12 @@
 action, review status, сущности, priority, repeat, SLA, capacity, proposal/version,
 reason codes, terminal state, evidence/draft/trace safety.
 
-Regression-набор покрывает 16 сценариев: 6 позитивных и 10 негативных.
+Regression-набор покрывает 100 языковых вариантов: 50 позитивных и 50 негативных.
+Шестнадцать проверенных семейств хранятся в `eval_case_families.json`, а
+`scripts/generate_eval_dataset.py` воспроизводимо разворачивает их в коммитящийся
+`eval_cases.json`. В наборе 90 уникальных текстов; одинаковые формулировки оставлены
+только в контролируемых парах, где меняется identity или состояние внешнего tool.
+Каждый кейс имеет уникальный request ID.
 
 | Класс | Проверка |
 |---|---|
@@ -29,4 +34,7 @@ Regression-набор покрывает 16 сценариев: 6 позитив
 
 В Eval Console можно фильтровать набор, запускать один кейс, позитивную/негативную
 группу или весь набор. Для каждого выполнения показываются expected vs actual,
-PASS/FAIL и отдельный trace. Автотесты прогоняют обе группы: `pytest`.
+PASS/FAIL и отдельный trace. Вкладка запусков считает strict case/assertion pass
+rate, macro/micro precision, recall и F1 для action, review status, priority,
+repeat, resolved entities, SLA kind, capacity, proposal и terminal state.
+Автотесты прогоняют обе группы: `pytest`.

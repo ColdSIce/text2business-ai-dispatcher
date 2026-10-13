@@ -8,7 +8,7 @@ import streamlit as st
 from pydantic import ValidationError
 
 from text2business.drafting import GatewayResponseDrafter
-from text2business.evals import execute_eval_cases
+from text2business.evals import calculate_eval_metrics, execute_eval_cases
 from text2business.extractor import GatewayExtractor
 from text2business.gateway import GatewayConfig, GatewayError, StructuredGatewayClient
 from text2business.models import (
@@ -367,11 +367,39 @@ def _render_runs_tab() -> None:
         st.info("Запусков пока нет. Выберите кейсы во вкладке «Тестовый датасет».")
         return
 
-    passed = sum(run.passed for run in runs)
-    summary = st.columns(3)
-    summary[0].metric("Выполнений", len(runs))
-    summary[1].metric("PASS", passed)
-    summary[2].metric("FAIL", len(runs) - passed)
+    report = calculate_eval_metrics(runs)
+    summary = st.columns(5)
+    summary[0].metric("Выполнений", report.cases)
+    summary[1].metric("Case pass", f"{report.case_pass_rate:.1%}")
+    summary[2].metric("Assertion pass", f"{report.assertion_pass_rate:.1%}")
+    summary[3].metric("Unsafe proposals", report.unsafe_proposals)
+    summary[4].metric(
+        "Safety failures",
+        report.unsafe_drafts + report.unredacted_traces,
+    )
+
+    with st.expander("Precision / Recall / F1", expanded=True):
+        st.caption(
+            "Macro усредняет классы поровну; micro показывает качество по всем примерам. "
+            "Для одного значения на кейс micro precision/recall/F1 совпадают с accuracy."
+        )
+        st.dataframe(
+            [
+                {
+                    "Поле": metric.field,
+                    "Примеров": metric.samples,
+                    "Классов": len(metric.labels),
+                    "Accuracy": f"{metric.accuracy:.1%}",
+                    "Macro precision": f"{metric.macro_precision:.1%}",
+                    "Macro recall": f"{metric.macro_recall:.1%}",
+                    "Macro F1": f"{metric.macro_f1:.1%}",
+                    "Micro F1": f"{metric.micro_f1:.1%}",
+                }
+                for metric in report.classification
+            ],
+            width="stretch",
+            hide_index=True,
+        )
     st.dataframe(_run_rows(runs), width="stretch", hide_index=True)
 
     by_id = {run.execution_id: run for run in runs}
@@ -475,7 +503,7 @@ def _render_manual_tab() -> None:
 
 
 def _render_prompt_lab_tab() -> None:
-    """Render per-case prompt overrides and guarded private-gateway executions."""
+    """Render prompt overrides and guarded allowlisted-gateway executions."""
 
     st.header("Prompt Lab")
     st.write(
@@ -488,15 +516,52 @@ def _render_prompt_lab_tab() -> None:
     except (GatewayError, ValueError) as exc:
         config = None
         st.info(
-            "Private AI Gateway не настроен — промпты можно редактировать, "
-            "но model-run пока недоступен."
+            "AI Gateway не настроен — промпты можно редактировать, "
+            "а токен OpenRouter можно ввести ниже только для текущей UI-сессии."
         )
-        with st.expander("Как включить model-run"):
+        with st.expander("Подключить OpenRouter", expanded=True):
+            gateway_url = st.text_input(
+                "Gateway URL",
+                value="https://openrouter.ai/api/v1",
+                key="gateway-url",
+            )
+            gateway_host = st.text_input(
+                "Разрешённый hostname",
+                value="openrouter.ai",
+                key="gateway-host",
+            )
+            gateway_model = st.text_input(
+                "Model ID",
+                placeholder="Введите точный model ID из OpenRouter",
+                key="gateway-model",
+            )
+            gateway_token = st.text_input(
+                "API token",
+                type="password",
+                key="gateway-token",
+                help="Хранится только в памяти текущей Streamlit-сессии.",
+            )
+            if gateway_model and gateway_token:
+                try:
+                    config = GatewayConfig.from_values(
+                        base_url=gateway_url,
+                        api_key=gateway_token,
+                        model=gateway_model,
+                        allowed_hosts=gateway_host,
+                    )
+                except GatewayError as config_error:
+                    st.error(str(config_error))
+                else:
+                    st.success(
+                        f"Gateway готов · model `{config.model}` · токен скрыт"
+                    )
+            st.caption(f"Environment config: {exc}")
+        with st.expander("Альтернатива: environment variables"):
             st.code(
-                "export AI_GATEWAY_BASE_URL=https://gateway.example/v1\n"
+                "export AI_GATEWAY_BASE_URL=https://openrouter.ai/api/v1\n"
                 "export AI_GATEWAY_API_KEY=...\n"
                 "export AI_GATEWAY_MODEL=...\n"
-                "export AI_GATEWAY_ALLOWED_HOSTS=gateway.example",
+                "export AI_GATEWAY_ALLOWED_HOSTS=openrouter.ai",
                 language="bash",
             )
             st.caption(str(exc))

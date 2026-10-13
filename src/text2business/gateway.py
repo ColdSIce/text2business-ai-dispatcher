@@ -4,7 +4,7 @@ import json
 import os
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
@@ -17,57 +17,72 @@ class GatewayError(RuntimeError):
 
 @dataclass(frozen=True)
 class GatewayConfig:
-    """Validated OpenAI-compatible private gateway configuration."""
+    """Validated allowlisted OpenAI-compatible gateway configuration."""
 
     base_url: str
-    api_key: str
+    api_key: str = field(repr=False)
     model: str
     allowed_hosts: tuple[str, ...]
     timeout_seconds: float = 15.0
 
     @classmethod
-    def from_env(cls) -> GatewayConfig:
-        """Load gateway settings without accepting public OpenRouter endpoints."""
+    def from_values(
+        cls,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        allowed_hosts: str | tuple[str, ...],
+        timeout_seconds: float = 15.0,
+    ) -> GatewayConfig:
+        """Validate explicit settings from environment or a password UI field."""
 
-        base_url = os.environ.get("AI_GATEWAY_BASE_URL", "").strip()
-        api_key = os.environ.get("AI_GATEWAY_API_KEY", "").strip()
-        model = os.environ.get("AI_GATEWAY_MODEL", "").strip()
+        base_url = base_url.strip()
+        api_key = api_key.strip()
+        model = model.strip()
         if not base_url or not api_key or not model:
             raise GatewayError(
                 "AI_GATEWAY_BASE_URL, AI_GATEWAY_API_KEY and AI_GATEWAY_MODEL are required"
             )
         parsed = urlparse(base_url)
         host = (parsed.hostname or "").casefold()
-        public_providers = (
-            "openrouter.ai",
-            "openai.com",
-            "anthropic.com",
-            "generativelanguage.googleapis.com",
-        )
-        if any(host == item or host.endswith(f".{item}") for item in public_providers):
-            raise GatewayError("public model-provider endpoints are forbidden")
         if parsed.scheme != "https" or not host:
             raise GatewayError("AI_GATEWAY_BASE_URL must be an absolute HTTPS URL")
-        allowed_hosts = tuple(
+        raw_allowed_hosts = (
+            allowed_hosts.split(",") if isinstance(allowed_hosts, str) else allowed_hosts
+        )
+        normalized_hosts = tuple(
             item.strip().casefold().lstrip(".")
-            for item in os.environ.get("AI_GATEWAY_ALLOWED_HOSTS", "").split(",")
+            for item in raw_allowed_hosts
             if item.strip()
         )
-        if not allowed_hosts:
+        if not normalized_hosts:
             raise GatewayError("AI_GATEWAY_ALLOWED_HOSTS is required")
-        if not any(host == item or host.endswith(f".{item}") for item in allowed_hosts):
+        if not any(host == item or host.endswith(f".{item}") for item in normalized_hosts):
             raise GatewayError("AI_GATEWAY_BASE_URL host is not allowlisted")
-        try:
-            timeout = float(os.environ.get("AI_GATEWAY_TIMEOUT_SECONDS", "15"))
-        except ValueError as exc:
-            raise GatewayError("AI_GATEWAY_TIMEOUT_SECONDS must be numeric") from exc
-        if timeout <= 0:
+        if timeout_seconds <= 0:
             raise GatewayError("AI_GATEWAY_TIMEOUT_SECONDS must be positive")
         return cls(
             base_url=base_url.rstrip("/"),
             api_key=api_key,
             model=model,
-            allowed_hosts=allowed_hosts,
+            allowed_hosts=normalized_hosts,
+            timeout_seconds=timeout_seconds,
+        )
+
+    @classmethod
+    def from_env(cls) -> GatewayConfig:
+        """Load an HTTPS gateway whose hostname is explicitly allowlisted."""
+
+        try:
+            timeout = float(os.environ.get("AI_GATEWAY_TIMEOUT_SECONDS", "15"))
+        except ValueError as exc:
+            raise GatewayError("AI_GATEWAY_TIMEOUT_SECONDS must be numeric") from exc
+        return cls.from_values(
+            base_url=os.environ.get("AI_GATEWAY_BASE_URL", ""),
+            api_key=os.environ.get("AI_GATEWAY_API_KEY", ""),
+            model=os.environ.get("AI_GATEWAY_MODEL", ""),
+            allowed_hosts=os.environ.get("AI_GATEWAY_ALLOWED_HOSTS", ""),
             timeout_seconds=timeout,
         )
 

@@ -531,7 +531,8 @@ Gateway path:
 - не может выбирать customer/site/asset, priority, SLA, repeat или action;
 - при timeout/schema error возвращает controlled degraded result.
 
-Public OpenRouter URL/key блокируется конфигурационной валидацией. Draft response
+Gateway разрешается только по HTTPS и явному hostname allowlist; OpenRouter может
+быть включён осознанно через `openrouter.ai`. Draft response
 может использовать тот же gateway вторым и последним model call; deterministic
 template остаётся fallback.
 
@@ -735,7 +736,7 @@ Offline eval агрегирует:
 
 ### Acceptance/evals
 
-Размеченный набор из 16 кейсов (6 позитивных, 10 негативных) проверяет:
+Размеченный набор из 100 кейсов (50 позитивных, 50 негативных) проверяет:
 
 1. полный Gold request;
 2. неоднозначная «17-я»;
@@ -756,7 +757,8 @@ Offline eval агрегирует:
 
 Oracle каждого кейса включает resolved entities, точный SLA, capacity, repeat
 target/version, reason codes, глубину trace, evidence validity, draft safety и
-trace redaction.
+trace redaction. Отчёт агрегирует strict pass rate и macro/micro precision,
+recall и F1 по ключевым классификационным полям.
 
 ## 24. Rollout и rollback
 

@@ -78,19 +78,24 @@ def test_gateway_extractor_accepts_a_reviewable_prompt_override() -> None:
     assert client.calls[0]["system_prompt"] == "case-specific extraction prompt"
 
 
-def test_gateway_config_rejects_public_openrouter(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gateway_config_accepts_explicitly_allowlisted_openrouter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("AI_GATEWAY_BASE_URL", "https://openrouter.ai/api/v1")
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "secret")
     monkeypatch.setenv("AI_GATEWAY_MODEL", "model")
     monkeypatch.setenv("AI_GATEWAY_ALLOWED_HOSTS", "openrouter.ai")
-    with pytest.raises(GatewayError, match="forbidden"):
-        GatewayConfig.from_env()
+    config = GatewayConfig.from_env()
+
+    assert config.base_url == "https://openrouter.ai/api/v1"
+    assert config.allowed_hosts == ("openrouter.ai",)
+    assert "secret" not in repr(config)
 
 
 @pytest.mark.parametrize(
     "base_url,error",
     [
-        ("https://api.openai.com/v1", "forbidden"),
+        ("https://api.openai.com/v1", "not allowlisted"),
         ("http://gateway.company.test/v1", "HTTPS"),
         ("https://other.company.test/v1", "not allowlisted"),
     ],

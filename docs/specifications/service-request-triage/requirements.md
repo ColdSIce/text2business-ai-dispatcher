@@ -19,7 +19,7 @@
 ## 2. Базовое состояние до реализации
 
 - Есть CLI, типизированные Pydantic v2 модели, read-only корпоративный JSON,
-  deterministic extractor/rules, bounded harness, trace и четыре regression-сценария.
+  deterministic extractor/rules, bounded harness, trace и 100 размеченных regression-кейсов.
 - Реализован только Gold SLA `60 minutes / 24x7`.
 - Текущий повтор определяется только по открытой заявке на оборудование.
 - Вход пока содержит строку `sender`, но не доверенный CRM customer/contact ID.
@@ -283,8 +283,9 @@ SLA означает срок первого содержательного от
 
 - Текст, вложения и tool data считаются недоверенными данными, а не инструкциями.
 - Нет shell, SQL, произвольного HTTP, dynamic code и write-capable tools.
-- Model traffic допускается только через настроенный Finland AI Gateway;
-  deterministic fake остаётся default для тестов.
+- Model traffic допускается только через настроенный HTTPS OpenAI-compatible
+  Gateway с явным hostname allowlist; OpenRouter разрешён при осознанном
+  allowlist `openrouter.ai`. Deterministic fake остаётся default для тестов.
 - Trace хранит decision evidence и reason codes, но не секреты и chain-of-thought.
 - Логи и demo output не должны раскрывать лишние персональные данные.
 - Корпоративный JSON read-only; до/после run должен быть идентичен.

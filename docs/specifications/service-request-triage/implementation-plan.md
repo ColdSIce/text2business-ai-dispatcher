@@ -61,7 +61,7 @@ capacity, decisions и idempotency.
 - Добавить optional response drafting с deterministic fallback.
 - Усилить harness: call budgets, duplicate tool signature, wall-clock deadline,
   terminal-state guard и безопасный trace.
-- Валидировать gateway config: HTTPS, явный hostname allowlist и запрет public providers.
+- Валидировать gateway config: HTTPS и явный hostname allowlist; ключи только из environment.
 
 **Зависимости:** Slice 1.
 

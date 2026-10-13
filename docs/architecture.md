@@ -4,7 +4,7 @@
 IncomingRequest + trusted CRM identity
   -> bounded synchronous harness
   -> pre-extraction safety scan of message + attachment
-  -> deterministic extractor OR private AI Gateway structured extractor
+  -> deterministic extractor OR allowlisted OpenAI-compatible Gateway extractor
   -> typed read-only repository tools
   -> deterministic identity/scope/repeat/priority/SLA/capacity policies
   -> dry-run TicketChangeProposal

@@ -7,7 +7,13 @@ from pydantic import JsonValue
 
 from text2business.drafting import ResponseDrafterPort, validate_draft_safety
 from text2business.extractor import ExtractorPort, validate_evidence
-from text2business.models import EvalAssertion, EvalCase, EvalRun
+from text2business.models import (
+    ClassificationMetrics,
+    EvalAssertion,
+    EvalCase,
+    EvalMetricsReport,
+    EvalRun,
+)
 from text2business.redaction import contains_sensitive_value
 from text2business.repository import JsonCorporateRepository
 from text2business.workflow import run_case
@@ -203,3 +209,142 @@ def execute_eval_cases(
         )
         for case in cases
     ]
+
+
+CLASSIFICATION_FIELDS = (
+    "action",
+    "review_status",
+    "priority",
+    "repeat_kind",
+    "resolved_customer_id",
+    "resolved_site_id",
+    "resolved_asset_id",
+    "sla_kind",
+    "capacity_feasibility",
+    "expects_proposal",
+    "terminal_state",
+)
+
+
+def _metric_label(value: JsonValue) -> str:
+    """Normalize nullable and boolean JSON labels for readable metric output."""
+
+    if value is None:
+        return "∅"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _classification_metrics(
+    field: str,
+    expected: list[str],
+    actual: list[str],
+) -> ClassificationMetrics:
+    """Calculate exact single-label macro/micro precision, recall and F1."""
+
+    labels = sorted(set(expected) | set(actual))
+    precisions: list[float] = []
+    recalls: list[float] = []
+    f1_scores: list[float] = []
+    total_tp = total_fp = total_fn = 0
+    for label in labels:
+        true_positive = sum(
+            expected_value == label and actual_value == label
+            for expected_value, actual_value in zip(expected, actual, strict=True)
+        )
+        false_positive = sum(
+            expected_value != label and actual_value == label
+            for expected_value, actual_value in zip(expected, actual, strict=True)
+        )
+        false_negative = sum(
+            expected_value == label and actual_value != label
+            for expected_value, actual_value in zip(expected, actual, strict=True)
+        )
+        precision = (
+            true_positive / (true_positive + false_positive)
+            if true_positive + false_positive
+            else 0.0
+        )
+        recall = (
+            true_positive / (true_positive + false_negative)
+            if true_positive + false_negative
+            else 0.0
+        )
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        precisions.append(precision)
+        recalls.append(recall)
+        f1_scores.append(f1)
+        total_tp += true_positive
+        total_fp += false_positive
+        total_fn += false_negative
+
+    samples = len(expected)
+    accuracy = sum(left == right for left, right in zip(expected, actual, strict=True))
+    accuracy = accuracy / samples if samples else 0.0
+    micro_precision = total_tp / (total_tp + total_fp) if total_tp + total_fp else 0.0
+    micro_recall = total_tp / (total_tp + total_fn) if total_tp + total_fn else 0.0
+    micro_f1 = (
+        2 * micro_precision * micro_recall / (micro_precision + micro_recall)
+        if micro_precision + micro_recall
+        else 0.0
+    )
+    count = len(labels)
+    return ClassificationMetrics(
+        field=field,
+        samples=samples,
+        labels=labels,
+        accuracy=accuracy,
+        macro_precision=sum(precisions) / count if count else 0.0,
+        macro_recall=sum(recalls) / count if count else 0.0,
+        macro_f1=sum(f1_scores) / count if count else 0.0,
+        micro_precision=micro_precision,
+        micro_recall=micro_recall,
+        micro_f1=micro_f1,
+    )
+
+
+def calculate_eval_metrics(runs: list[EvalRun]) -> EvalMetricsReport:
+    """Aggregate exact, classification and safety metrics for UI comparison."""
+
+    assertion_maps = [
+        {assertion.name: assertion for assertion in run.assertions}
+        for run in runs
+    ]
+    classification: list[ClassificationMetrics] = []
+    for field in CLASSIFICATION_FIELDS:
+        selected = [items[field] for items in assertion_maps if field in items]
+        classification.append(
+            _classification_metrics(
+                field,
+                [_metric_label(item.expected) for item in selected],
+                [_metric_label(item.actual) for item in selected],
+            )
+        )
+
+    all_assertions = [assertion for run in runs for assertion in run.assertions]
+    passed_cases = sum(run.passed for run in runs)
+    passed_assertions = sum(assertion.passed for assertion in all_assertions)
+    proposal_assertions = [
+        items["expects_proposal"] for items in assertion_maps if "expects_proposal" in items
+    ]
+    draft_assertions = [items["draft_safe"] for items in assertion_maps if "draft_safe" in items]
+    trace_assertions = [
+        items["trace_redacted"] for items in assertion_maps if "trace_redacted" in items
+    ]
+    return EvalMetricsReport(
+        cases=len(runs),
+        passed_cases=passed_cases,
+        case_pass_rate=passed_cases / len(runs) if runs else 0.0,
+        assertions=len(all_assertions),
+        passed_assertions=passed_assertions,
+        assertion_pass_rate=(
+            passed_assertions / len(all_assertions) if all_assertions else 0.0
+        ),
+        classification=classification,
+        unsafe_proposals=sum(
+            item.expected is False and item.actual is True for item in proposal_assertions
+        ),
+        unsafe_drafts=sum(item.actual is False for item in draft_assertions),
+        unredacted_traces=sum(item.actual is False for item in trace_assertions),
+    )

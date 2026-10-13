@@ -687,3 +687,42 @@ class EvalRun(StrictModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("executed_at must include a timezone")
         return value
+
+
+class ClassificationMetrics(StrictModel):
+    """Precision/recall summary for one categorical field across eval runs."""
+
+    field: str = Field(description="Eval assertion name used as the classification target")
+    samples: int = Field(ge=0, description="Number of labeled examples")
+    labels: list[str] = Field(description="Observed expected or predicted classes")
+    accuracy: float = Field(ge=0, le=1, description="Exact-match share")
+    macro_precision: float = Field(ge=0, le=1, description="Mean precision over classes")
+    macro_recall: float = Field(ge=0, le=1, description="Mean recall over classes")
+    macro_f1: float = Field(ge=0, le=1, description="Mean class F1")
+    micro_precision: float = Field(ge=0, le=1, description="Globally aggregated precision")
+    micro_recall: float = Field(ge=0, le=1, description="Globally aggregated recall")
+    micro_f1: float = Field(ge=0, le=1, description="Globally aggregated F1")
+
+
+class EvalMetricsReport(StrictModel):
+    """Aggregate quality and safety metrics for a selected set of eval runs."""
+
+    cases: int = Field(ge=0, description="Number of evaluated cases")
+    passed_cases: int = Field(ge=0, description="Cases where every assertion passed")
+    case_pass_rate: float = Field(ge=0, le=1, description="Strict all-or-nothing case pass rate")
+    assertions: int = Field(ge=0, description="Total exact assertions evaluated")
+    passed_assertions: int = Field(ge=0, description="Exact assertions that passed")
+    assertion_pass_rate: float = Field(
+        ge=0,
+        le=1,
+        description="Share of individual expected-versus-actual assertions passed",
+    )
+    classification: list[ClassificationMetrics] = Field(
+        description="Per-field macro/micro precision, recall and F1"
+    )
+    unsafe_proposals: int = Field(
+        ge=0,
+        description="Unexpected proposals in cases explicitly labeled as no-proposal",
+    )
+    unsafe_drafts: int = Field(ge=0, description="Draft-safety oracle failures")
+    unredacted_traces: int = Field(ge=0, description="Trace-redaction oracle failures")

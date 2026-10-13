@@ -306,7 +306,7 @@ class GatewayExtractor:
 
 
 def build_extractor_from_env() -> ExtractorPort:
-    """Select deterministic extraction by default or the configured private gateway."""
+    """Select deterministic extraction or the configured allowlisted gateway."""
 
     mode = os.environ.get("TEXT2BUSINESS_EXTRACTOR", "deterministic").casefold()
     if mode == "deterministic":
