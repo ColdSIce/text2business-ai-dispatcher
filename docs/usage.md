@@ -24,6 +24,9 @@ Defaults для code review находятся в `src/text2business/prompts.py`
 `GatewayExtractor(..., system_prompt=...)` и
 `GatewayResponseDrafter(..., system_prompt=...)` принимают явный override.
 Промпт не может менять детерминированные priority, SLA, repeat или decision rules.
+Каждый запуск автоматически сохраняется без токена в
+`artifacts/eval-runs/<timestamp>-<mode>-<count>.json`: там есть prompt snapshot,
+expected vs actual, метрики, результат и trace.
 
 ## CLI
 

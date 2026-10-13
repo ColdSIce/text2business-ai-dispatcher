@@ -289,7 +289,9 @@ class GatewayExtractor:
             if attempt:
                 prompt += (
                     f"\nПредыдущий ответ не прошёл валидацию: {last_error}. "
-                    "Верни только исправленный JSON."
+                    "Исправь имена и структуру полей строго по JSON Schema. "
+                    "Корень ответа — сам ExtractedFacts; не добавляй обёртку "
+                    "extracted_facts, result или data. Верни только исправленный JSON."
                 )
             raw = self.client.complete_json(
                 system_prompt=self.system_prompt,
@@ -297,12 +299,60 @@ class GatewayExtractor:
                 response_model=ExtractedFacts,
             )
             try:
-                facts = ExtractedFacts.model_validate_json(raw)
+                payload = _normalize_gateway_facts(json.loads(raw))
+                facts = ExtractedFacts.model_validate(payload)
                 validate_evidence(facts, request)
                 return facts
-            except (ValidationError, ValueError) as exc:
+            except (json.JSONDecodeError, ValidationError, ValueError) as exc:
                 last_error = str(exc)
         raise GatewayError(f"structured extraction failed validation: {last_error}")
+
+
+_FACT_FIELDS = tuple(ExtractedFacts.model_fields)
+_CONFIDENCE_ALIASES = {
+    "high": 0.9,
+    "medium": 0.6,
+    "low": 0.3,
+    "uncertain": 0.5,
+}
+
+
+def _normalize_gateway_facts(payload: object) -> object:
+    """Repair only harmless, common structured-output deviations from small models."""
+
+    if not isinstance(payload, dict):
+        return payload
+    wrapped = payload.get("extracted_facts")
+    if isinstance(wrapped, dict):
+        payload = wrapped
+
+    normalized = dict(payload)
+    for field_name in _FACT_FIELDS:
+        value = normalized.get(field_name)
+        if field_name == "symptoms":
+            if isinstance(value, list):
+                normalized[field_name] = [
+                    _normalize_evidence_fact(item) for item in value
+                ]
+            continue
+        # A bare boolean has no evidence and therefore cannot become a fact.
+        if isinstance(value, bool):
+            normalized[field_name] = None
+        elif isinstance(value, dict):
+            normalized[field_name] = _normalize_evidence_fact(value)
+    return normalized
+
+
+def _normalize_evidence_fact(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    normalized = dict(value)
+    confidence = normalized.get("confidence")
+    if isinstance(confidence, str):
+        alias = _CONFIDENCE_ALIASES.get(confidence.strip().casefold())
+        if alias is not None:
+            normalized["confidence"] = alias
+    return normalized
 
 
 def build_extractor_from_env() -> ExtractorPort:

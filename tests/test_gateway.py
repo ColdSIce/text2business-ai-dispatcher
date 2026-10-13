@@ -66,6 +66,29 @@ def test_gateway_extractor_repairs_once_then_stops() -> None:
         extractor.extract(SCENARIOS["full"])
 
 
+def test_gateway_extractor_normalizes_safe_small_model_deviations() -> None:
+    wrapped = json.dumps(
+        {
+            "extracted_facts": {
+                "asset_reference": {
+                    "value": "ХУ-18",
+                    "evidence": "ХУ-18",
+                    "confidence": "high",
+                    "provenance": "message",
+                },
+                "suspicious_instruction": False,
+            }
+        },
+        ensure_ascii=False,
+    )
+    extractor = GatewayExtractor(FakeGatewayClient([wrapped]))  # type: ignore[arg-type]
+
+    result = extractor.extract(SCENARIOS["full"])
+
+    assert result.asset_reference and result.asset_reference.confidence == 0.9
+    assert result.suspicious_instruction is None
+
+
 def test_gateway_extractor_accepts_a_reviewable_prompt_override() -> None:
     client = FakeGatewayClient([_valid_facts()])
     extractor = GatewayExtractor(  # type: ignore[arg-type]
@@ -146,6 +169,8 @@ def test_unsafe_model_draft_is_replaced_by_safe_template() -> None:
 
 def test_default_prompts_are_reviewable_russian_text() -> None:
     assert "извлекаешь факты" in DEFAULT_EXTRACTION_PROMPT
+    assert "без ключей extracted_facts" in DEFAULT_EXTRACTION_PROMPT
+    assert "customer_name, site_reference, asset_reference" in DEFAULT_EXTRACTION_PROMPT
     assert "Верни только валидный JSON" in DEFAULT_EXTRACTION_PROMPT
     assert "Напиши краткий, спокойный" in DEFAULT_DRAFTING_PROMPT
     assert "Не обещай выезд" in DEFAULT_DRAFTING_PROMPT

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import streamlit as st
@@ -255,13 +256,30 @@ def _render_result(
                 st.warning(warning)
 
 
-def _store_eval_runs(runs: list[EvalRun]) -> None:
-    """Prepend new runs to the in-memory UI history and select the newest one."""
+def _store_eval_runs(runs: list[EvalRun]) -> Path | None:
+    """Keep UI history and persist a token-free JSON artifact for every batch."""
 
     history = list(st.session_state.get("eval_runs", []))
     st.session_state["eval_runs"] = [*reversed(runs), *history]
-    if runs:
-        st.session_state["selected_execution_id"] = runs[-1].execution_id
+    if not runs:
+        return None
+    st.session_state["selected_execution_id"] = runs[-1].execution_id
+    saved_at = datetime.now().astimezone()
+    output_dir = Path.cwd() / "artifacts" / "eval-runs"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    mode = runs[0].execution_mode
+    output_path = output_dir / f"{saved_at:%Y%m%dT%H%M%S}-{mode}-{len(runs)}.json"
+    payload = {
+        "saved_at": saved_at.isoformat(),
+        "metrics": calculate_eval_metrics(runs).model_dump(mode="json"),
+        "runs": [run.model_dump(mode="json") for run in runs],
+    }
+    output_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    st.session_state["last_eval_artifact"] = str(output_path)
+    return output_path
 
 
 def _execute_case_ids(case_ids: list[str]) -> None:
@@ -273,12 +291,14 @@ def _execute_case_ids(case_ids: list[str]) -> None:
         return
     with st.spinner(f"Выполняю кейсы: {len(selected)}…"):
         runs = execute_eval_cases(selected)
-    _store_eval_runs(runs)
+    artifact_path = _store_eval_runs(runs)
     passed = sum(run.passed for run in runs)
     if passed == len(runs):
         st.success(f"Готово: {passed}/{len(runs)} PASS. Результаты добавлены во вкладку «Запуски».")
     else:
         st.error(f"Есть расхождения: {passed}/{len(runs)} PASS.")
+    if artifact_path:
+        st.caption(f"JSON сохранён: `{artifact_path}`")
 
 
 def _render_dataset_tab() -> None:
@@ -632,12 +652,14 @@ def _render_prompt_lab_tab() -> None:
                 extraction_prompt=extraction_prompt,
                 drafting_prompt=drafting_prompt,
             )
-        _store_eval_runs(runs)
+        artifact_path = _store_eval_runs(runs)
         passed = sum(run.passed for run in runs)
         if passed == len(runs):
             st.success(f"Model-run: {passed}/{len(runs)} PASS. Откройте вкладку «Запуски».")
         else:
             st.error(f"Model-run: {passed}/{len(runs)} PASS. Смотрите expected vs actual и trace.")
+        if artifact_path:
+            st.caption(f"JSON сохранён: `{artifact_path}`")
 
 
 def main() -> None:
