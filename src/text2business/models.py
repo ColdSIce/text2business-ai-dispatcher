@@ -32,8 +32,14 @@ class Action(StrEnum):
     HANDOFF_TO_DISPATCHER = "handoff_to_dispatcher"
 
 
+class TerminalState(StrEnum):
+    COMPLETED = "completed"
+    NEEDS_USER_INPUT = "needs_user_input"
+    HANDED_OFF = "handed_off"
+
+
 class EvidenceFact(StrictModel):
-    value: str | bool
+    value: str | bool | float
     evidence: str
     confidence: float = Field(ge=0, le=1)
     provenance: Provenance
@@ -44,7 +50,11 @@ class ExtractedFacts(StrictModel):
     site: EvidenceFact | None = None
     asset: EvidenceFact | None = None
     problem: EvidenceFact | None = None
+    symptoms: list[EvidenceFact] = Field(default_factory=list)
+    desired_deadline: EvidenceFact | None = None
     backup_available: EvidenceFact | None = None
+    previous_contact: EvidenceFact | None = None
+    suspicious_instruction: EvidenceFact | None = None
 
 
 class IncomingRequest(StrictModel):
@@ -193,7 +203,24 @@ class TraceEvent(StrictModel):
     output: dict[str, JsonValue]
 
 
+class RunLimits(StrictModel):
+    max_tool_calls: int = Field(default=8, ge=1)
+    max_model_calls: int = Field(default=2, ge=0)
+    max_mutations: Literal[1] = 1
+
+
+class RunMetadata(StrictModel):
+    run_id: str
+    trace_id: str
+    terminal_state: TerminalState
+    tool_calls: int = Field(ge=0)
+    model_calls: int = Field(ge=0)
+    mutation_calls: int = Field(ge=0)
+    limits: RunLimits
+
+
 class CaseResult(StrictModel):
+    run: RunMetadata
     request: IncomingRequest
     facts: ExtractedFacts
     site_candidates: list[SiteMatch]
@@ -210,4 +237,3 @@ class CaseResult(StrictModel):
     clarification_questions: list[str]
     warnings: list[str]
     trace: list[TraceEvent]
-

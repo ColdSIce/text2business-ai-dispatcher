@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 
 from text2business.extractor import DeterministicExtractor
+from text2business.harness import HarnessGuard
 from text2business.models import (
     Action,
     CaseResult,
@@ -14,6 +15,7 @@ from text2business.models import (
     IncomingRequest,
     JsonValue,
     TicketMutationInput,
+    TerminalState,
     TraceEvent,
     TraceKind,
 )
@@ -51,6 +53,7 @@ def run_case(
 ) -> CaseResult:
     extractor = extractor or DeterministicExtractor()
     tools = tools or MockCorporateTools()
+    guard = HarnessGuard(request)
     trace: list[TraceEvent] = []
 
     facts = extractor.extract(request)
@@ -62,10 +65,45 @@ def run_case(
         _json_dict(facts),
     )
 
+    if facts.suspicious_instruction is not None:
+        decision = Decision(
+            action=Action.HANDOFF_TO_DISPATCHER,
+            reason_codes=["PROMPT_INJECTION_DETECTED", "UNTRUSTED_INPUT"],
+            explanation="Инструкции внутри клиентского текста не могут управлять tools.",
+            requires_human_confirmation=True,
+        )
+        _trace(
+            trace,
+            TraceKind.RULE,
+            "untrusted_input_guard",
+            {"evidence": facts.suspicious_instruction.evidence},
+            {"action": decision.action, "mutation_allowed": False},
+        )
+        return CaseResult(
+            run=guard.finish(TerminalState.HANDED_OFF),
+            request=request,
+            facts=facts,
+            site_candidates=[],
+            asset_candidates=[],
+            resolved_site=None,
+            resolved_asset=None,
+            contract=None,
+            open_tickets=[],
+            priority=None,
+            sla=None,
+            decision=decision,
+            mutation=None,
+            draft_response="Обращение передано диспетчеру для безопасной проверки.",
+            clarification_questions=[],
+            warnings=["Prompt injection was treated as untrusted data; no tool was called"],
+            trace=trace,
+        )
+
     site_query = " ".join(
         str(fact.value) for fact in (facts.customer, facts.site) if fact is not None
     )
     site_input = FindSiteInput(query=site_query)
+    guard.before_tool()
     site_output = tools.find_customer_or_site(site_input)
     _trace(trace, TraceKind.TOOL, "find_customer_or_site", _json_dict(site_input), _json_dict(site_output))
 
@@ -79,6 +117,7 @@ def run_case(
             requires_human_confirmation=True,
         )
         return CaseResult(
+            run=guard.finish(TerminalState.NEEDS_USER_INPUT),
             request=request,
             facts=facts,
             site_candidates=site_output.matches,
@@ -102,6 +141,7 @@ def run_case(
         site_id=site.site_id,
         query=str(facts.asset.value) if facts.asset else "",
     )
+    guard.before_tool()
     asset_output = tools.find_assets(asset_input)
     _trace(trace, TraceKind.TOOL, "find_assets", _json_dict(asset_input), _json_dict(asset_output))
     if len(asset_output.matches) != 1:
@@ -112,6 +152,7 @@ def run_case(
             requires_human_confirmation=True,
         )
         return CaseResult(
+            run=guard.finish(TerminalState.NEEDS_USER_INPUT),
             request=request,
             facts=facts,
             site_candidates=site_output.matches,
@@ -132,6 +173,7 @@ def run_case(
 
     asset = asset_output.matches[0].asset
     contract_input = GetContractInput(site_id=site.site_id)
+    guard.before_tool()
     contract_output = tools.get_contract(contract_input)
     _trace(trace, TraceKind.TOOL, "get_contract", _json_dict(contract_input), _json_dict(contract_output))
     if contract_output.contract is None:
@@ -143,8 +185,36 @@ def run_case(
         site_id=site.site_id,
         asset_id=asset.asset_id,
     )
+    guard.before_tool()
     tickets_output = tools.find_open_tickets(tickets_input)
     _trace(trace, TraceKind.TOOL, "find_open_tickets", _json_dict(tickets_input), _json_dict(tickets_output))
+
+    if len(tickets_output.tickets) > 1:
+        decision = Decision(
+            action=Action.HANDOFF_TO_DISPATCHER,
+            reason_codes=["MULTIPLE_OPEN_TICKETS"],
+            explanation="Найдено несколько открытых заявок по одному оборудованию.",
+            requires_human_confirmation=True,
+        )
+        return CaseResult(
+            run=guard.finish(TerminalState.HANDED_OFF),
+            request=request,
+            facts=facts,
+            site_candidates=site_output.matches,
+            asset_candidates=asset_output.matches,
+            resolved_site=site,
+            resolved_asset=asset,
+            contract=contract,
+            open_tickets=tickets_output.tickets,
+            priority=None,
+            sla=None,
+            decision=decision,
+            mutation=None,
+            draft_response="Обращение передано диспетчеру для проверки открытых заявок.",
+            clarification_questions=[],
+            warnings=["Ticket mutation was not attempted"],
+            trace=trace,
+        )
 
     priority = assess_priority(asset, facts)
     sla = calculate_sla(request, contract)
@@ -185,6 +255,7 @@ def run_case(
             "source_channel": request.channel,
         },
     )
+    guard.before_tool(mutation=True)
     mutation = tools.create_or_update_ticket(mutation_input)
     _trace(
         trace,
@@ -194,12 +265,14 @@ def run_case(
         _json_dict(mutation),
     )
 
+    operation_label = "Обновление" if action == Action.UPDATE_EXISTING else "Создание"
     draft_response = (
         f"Приняли обращение по {asset.local_code} на объекте {site.address}. "
         f"Предварительный приоритет — {priority.priority}; срок первичного ответа по договору — "
-        f"до {sla.deadline:%d.%m.%Y %H:%M %Z}. Создание заявки ожидает подтверждения диспетчера."
+        f"до {sla.deadline:%d.%m.%Y %H:%M %Z}. {operation_label} заявки ожидает подтверждения диспетчера."
     )
     return CaseResult(
+        run=guard.finish(TerminalState.COMPLETED),
         request=request,
         facts=facts,
         site_candidates=site_output.matches,
@@ -217,4 +290,3 @@ def run_case(
         warnings=mutation.warnings,
         trace=trace,
     )
-

@@ -46,7 +46,8 @@ class MockCorporateTools:
                 if token not in {"москва", "екатеринбург", "улица", "шоссе"}
             }
             query_tokens = set(query.split())
-            address_matches = all(
+            descriptive_tokens = {token for token in address_tokens if not token.isdigit()}
+            descriptive_match = any(
                 any(
                     candidate == token
                     or (
@@ -56,11 +57,15 @@ class MockCorporateTools:
                     )
                     for candidate in query_tokens
                 )
-                for token in address_tokens
+                for token in descriptive_tokens
             )
-            if address_tokens and address_matches:
-                score += 4
-                reasons.append("address_tokens_exact")
+            if descriptive_match:
+                score += 3
+                reasons.append("address_street_match")
+            numeric_tokens = {token for token in address_tokens if token.isdigit()}
+            if numeric_tokens.intersection(query_tokens):
+                score += 1
+                reasons.append("address_number_match")
 
             if score:
                 matches.append(SiteMatch(site=site, score=score, matched_by=reasons))

@@ -14,5 +14,5 @@ RUN pip install --no-cache-dir -r requirements.lock \
 
 USER 65532:65532
 
-CMD ["python", "-m", "text2business.cli"]
-
+ENTRYPOINT ["python", "-m", "text2business.cli"]
+CMD ["--scenario", "full"]
