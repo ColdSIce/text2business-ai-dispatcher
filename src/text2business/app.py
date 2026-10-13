@@ -271,15 +271,20 @@ def _store_eval_runs(runs: list[EvalRun]) -> Path | None:
     output_path = output_dir / f"{saved_at:%Y%m%dT%H%M%S}-{mode}-{len(runs)}.json"
     payload = {
         "saved_at": saved_at.isoformat(),
+        "dataset": {
+            "version": EVAL_DATASET.version,
+            "case_count": len(EVAL_DATASET.cases),
+            "source": "src/text2business/data/eval_cases.json",
+        },
         "metrics": calculate_eval_metrics(runs).model_dump(mode="json"),
         "runs": [run.model_dump(mode="json") for run in runs],
     }
-    output_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    st.session_state["last_eval_artifact"] = str(output_path)
-    return output_path
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    output_path.write_text(serialized, encoding="utf-8")
+    stable_path = output_dir / f"latest-{mode}-{len(runs)}.json"
+    stable_path.write_text(serialized, encoding="utf-8")
+    st.session_state["last_eval_artifact"] = str(stable_path)
+    return stable_path
 
 
 def _execute_case_ids(case_ids: list[str]) -> None:
@@ -651,6 +656,7 @@ def _render_prompt_lab_tab() -> None:
                 execution_mode="gateway",
                 extraction_prompt=extraction_prompt,
                 drafting_prompt=drafting_prompt,
+                max_workers=4 if run_regression else 1,
             )
         artifact_path = _store_eval_runs(runs)
         passed = sum(run.passed for run in runs)

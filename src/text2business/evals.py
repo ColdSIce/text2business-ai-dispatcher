@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -195,11 +196,15 @@ def execute_eval_cases(
     execution_mode: str = "deterministic",
     extraction_prompt: str | None = None,
     drafting_prompt: str | None = None,
+    max_workers: int = 1,
 ) -> list[EvalRun]:
-    """Execute selected cases in stable dataset order, one bounded run per case."""
+    """Execute independent bounded cases, retaining stable dataset order."""
 
-    return [
-        execute_eval_case(
+    if max_workers < 1:
+        raise ValueError("max_workers must be positive")
+
+    def execute(case: EvalCase) -> EvalRun:
+        return execute_eval_case(
             case,
             extractor=extractor,
             drafter=drafter,
@@ -207,8 +212,11 @@ def execute_eval_cases(
             extraction_prompt=extraction_prompt,
             drafting_prompt=drafting_prompt,
         )
-        for case in cases
-    ]
+
+    if max_workers == 1 or len(cases) < 2:
+        return [execute(case) for case in cases]
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(cases))) as pool:
+        return list(pool.map(execute, cases))
 
 
 CLASSIFICATION_FIELDS = (

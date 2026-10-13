@@ -27,6 +27,11 @@ Defaults для code review находятся в `src/text2business/prompts.py`
 Каждый запуск автоматически сохраняется без токена в
 `artifacts/eval-runs/<timestamp>-<mode>-<count>.json`: там есть prompt snapshot,
 expected vs actual, метрики, результат и trace.
+Полный 100-case run дополнительно обновляет tracked snapshot
+`artifacts/eval-runs/latest-<mode>-100.json`, который можно коммитить вместе с кодом.
+Файл содержит ссылку на версию размеченного датасета, но не API-токен.
+Полный model-run выполняет независимые кейсы четырьмя worker'ами, но сохраняет
+порядок датасета и индивидуальные лимиты каждого кейса.
 
 ## CLI
 

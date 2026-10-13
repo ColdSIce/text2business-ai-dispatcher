@@ -7,4 +7,6 @@ dist/
 build/
 .DS_Store
 .env
-artifacts/eval-runs/
+artifacts/eval-runs/*
+!artifacts/eval-runs/latest-gateway-100.json
+!artifacts/eval-runs/latest-deterministic-100.json
