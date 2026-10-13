@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 
@@ -91,6 +92,28 @@ def _fact_rows(result: CaseResult) -> list[dict[str, Any]]:
     return rows
 
 
+def _compact_json(value: dict[str, Any], limit: int = 180) -> str:
+    """Serialize one trace side compactly for the always-visible step table."""
+
+    rendered = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return rendered if len(rendered) <= limit else f"{rendered[: limit - 1]}…"
+
+
+def _trace_rows(result: CaseResult) -> list[dict[str, Any]]:
+    """Flatten every trace step with visible input and output summaries."""
+
+    return [
+        {
+            "Шаг": event.step,
+            "Тип": event.kind.value,
+            "Операция": event.name,
+            "Вход": _compact_json(event.input),
+            "Результат": _compact_json(event.output),
+        }
+        for event in result.trace
+    ]
+
+
 def _render_trace(result: CaseResult) -> None:
     """Show the safe ordered trace of one execution, step by step."""
 
@@ -104,6 +127,9 @@ def _render_trace(result: CaseResult) -> None:
         f"Terminal state: `{result.run.terminal_state.value}` · "
         f"Trace ID: `{result.run.trace_id}`"
     )
+    st.markdown("**Все шаги выполнения**")
+    st.dataframe(_trace_rows(result), width="stretch", hide_index=True)
+    st.caption("Ниже каждый шаг можно раскрыть и посмотреть полный input/output.")
     for event in result.trace:
         with st.expander(
             f"{event.step}. {event.kind.value.upper()} · {event.name}",
@@ -357,8 +383,14 @@ def _render_runs_tab() -> None:
     if st.button("Повторить этот запуск"):
         _execute_case_ids([run.case_id])
 
-    result_tab, trace_tab, raw_tab = st.tabs(["Результат", "Trace", "Полный JSON"])
-    with result_tab:
+    st.subheader(f"Детали выполнения · {run.case_title}")
+    view = st.radio(
+        "Что показать",
+        ["Expected vs actual", "Trace шагов", "Итоговый результат", "Полный JSON"],
+        horizontal=True,
+        key=f"run-view-{execution_id}",
+    )
+    if view == "Expected vs actual":
         if run.passed:
             st.success("Все ожидания совпали")
         else:
@@ -376,10 +408,11 @@ def _render_runs_tab() -> None:
             width="stretch",
             hide_index=True,
         )
-        _render_result(run.result)
-    with trace_tab:
+    elif view == "Trace шагов":
         _render_trace(run.result)
-    with raw_tab:
+    elif view == "Итоговый результат":
+        _render_result(run.result)
+    else:
         st.json(run.model_dump(mode="json"))
 
 
