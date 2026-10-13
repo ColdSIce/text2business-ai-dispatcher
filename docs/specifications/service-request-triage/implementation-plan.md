@@ -1,6 +1,6 @@
 # Триаж сервисного обращения — Implementation Plan
 
-**Статус:** Approved for implementation
+**Статус:** Implemented and verified
 
 **Дата:** 2026-10-13
 
@@ -21,14 +21,14 @@
 - Расширить модели trusted identity, customer, ticket lifecycle, repeat,
   priority/SLA/capacity assessments, decision и proposal.
 - Добавить customers, closed tickets, SLA deadlines и capacity в JSON fixture.
-- Переименовать code contract `TicketMutation*` в `TicketChangeProposal*`.
+- Перевести code contract на `TicketChangeProposal*`.
 - Добавить docstrings/field descriptions для сущностей и неочевидных полей.
 
 **Зависимости:** approved requirements.
 
 **Проверка:** Pydantic schema tests, fixture validation, `extra=forbid`.
 
-**Удаляемый legacy:** старые mutation models и `open_tickets`-only fixture shape.
+**Удаляемый legacy:** старые модели изменения и `open_tickets`-only fixture shape.
 
 **Оставшийся риск:** правила ещё не подключены к workflow.
 
@@ -131,7 +131,7 @@ capacity, decisions и idempotency.
 - Production migration/backfill отсутствуют.
 - Fixture меняется атомарно вместе с моделями и tests.
 - Старый JSON CLI contract не сохраняется; версия проекта становится `0.2.0`.
-- Compatibility aliases старых mutation names не создаются.
+- Compatibility aliases старых названий изменения не создаются.
 
 ## 9. Observability и operational checks
 

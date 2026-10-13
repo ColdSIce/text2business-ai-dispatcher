@@ -1,32 +1,28 @@
 # Agent harness
 
-## Scope
+Один входящий контакт создаёт один ограниченный run: разобрать заявку и подготовить максимум одно предложение изменения тикета.
 
-Один входящий запрос создаёт один ограниченный run с неизменяемой целью: разобрать одну сервисную заявку и предложить максимум одну ticket mutation.
+## Конечный pipeline
 
-## Pipeline
+1. Проверить вход и trusted identity.
+2. Извлечь факты и проверить каждую evidence-цитату.
+3. Завершить run при injection, конфликте CRM/текста или неоднозначности.
+4. Вызвать только allowlisted typed read-tools.
+5. Кодом определить повтор, приоритет, SLA и capacity feasibility.
+6. Выбрать create/update/clarification/handoff/approval.
+7. Подготовить максимум один dry-run `TicketChangeProposal`.
+8. Вернуть один terminal result и безопасный trace.
 
-1. Валидировать типизированный вход.
-2. Извлечь факты и evidence.
-3. Остановиться при prompt injection или конфликте scope.
-4. Вызвать только allowlisted типизированные read-tools.
-5. Остановиться при неоднозначном site или asset.
-6. Детерминированно найти дубликат, приоритет и SLA.
-7. Сформировать максимум одну dry-run mutation.
-8. Вернуть один терминальный результат и безопасный trace.
-
-## Limits
+## Ограничители
 
 - максимум 8 tool calls;
-- максимум 2 model calls, включая одну schema-repair попытку;
-- одна заявка и одна mutation на run;
-- mutation всегда требует idempotency key, expected version и подтверждение человека;
-- повтор mutation после неизвестного результата запрещён.
+- максимум 2 model calls, включая schema repair или drafting;
+- максимум 1 предложение на run;
+- wall-clock deadline;
+- повтор одинаковой tool-сигнатуры запрещён;
+- после terminal state новые шаги запрещены;
+- предложение содержит `idempotency_key`, `expected_version` и `requires_human_confirmation=true`.
 
-## Trust and model boundary
+Текст клиента и вложения считаются данными, а не инструкциями. Gateway опционален; при ошибке extraction система безопасно передаёт заявку диспетчеру, а при ошибке drafting использует детерминированный текст.
 
-Клиентский текст, attachment и tool data считаются данными, а не инструкциями. Внешняя модель опциональна; единственный разрешённый маршрут — `AI_GATEWAY_BASE_URL`. Публичные OpenRouter hosts и ключи запрещены.
-
-В trace не попадают секреты, chain-of-thought и полные provider payloads. Для демо trace содержит только факты, вызванные tools, reason codes и подтверждённые результаты.
-
-DBOS, PostgreSQL, Redis, streaming и recovery workflow сознательно не используются: они не дают ценности четырёхчасовому локальному прототипу без реальных side effects.
+В trace нет секретов, chain-of-thought и полных provider payload. Circuit breakers и надёжное возобновление — явно будущий production-слой, а не скрытая возможность прототипа.

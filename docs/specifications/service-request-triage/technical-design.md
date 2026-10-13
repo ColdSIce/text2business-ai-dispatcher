@@ -1,6 +1,6 @@
 # Триаж сервисного обращения — Technical Design
 
-**Статус:** Approved
+**Статус:** Implemented
 
 **Дата:** 2026-10-13
 
@@ -25,7 +25,7 @@
 - Бинарные вложения, OCR и speech-to-text.
 - Production auth/RBAC, holiday calendar и долговременное хранение audit log.
 
-## 3. Подтверждённое текущее состояние
+## 3. Базовое состояние до реализации
 
 Текущий Python 3.12 пакет — локальный модульный монолит:
 
@@ -55,7 +55,7 @@ CLI -> run_case()
 - SLA parser поддерживает только `60 minutes / 24x7`;
 - priority не различает безопасность, растущую температуру и надёжность резерва;
 - нет repeat/capacity/review status/override моделей;
-- `TicketMutation*` использует технический термин вместо бизнес-модели proposal;
+- старый контракт изменения заявки не использует бизнес-модель proposal;
 - missing contract приводит к exception вместо контролируемого результата.
 
 ## 4. Выбранная архитектура
@@ -704,8 +704,7 @@ Offline eval агрегирует:
 1. Расширить fixture customers, tickets и capacity.
 2. Заменить модели и tool contracts.
 3. Перевести единственный workflow и все tests на новый `CaseResult`.
-4. Переименовать `TicketMutation*`/`mutation` в
-   `TicketChangeProposal*`/`proposal` без compatibility alias.
+4. Перевести контракт на `TicketChangeProposal*`/`proposal` без compatibility alias.
 5. Обновить CLI output, docs, scenarios и evals.
 
 Постоянного dual contract не будет. Версия прототипа увеличивается с `0.1.0`

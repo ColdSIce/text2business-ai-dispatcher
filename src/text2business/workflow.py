@@ -1,30 +1,76 @@
 from __future__ import annotations
 
-import hashlib
+from collections.abc import Callable
+from datetime import timedelta
+from typing import Any, TypeVar
 
-from text2business.extractor import DeterministicExtractor
+from pydantic import BaseModel, JsonValue
+
+from text2business.capacity import assess_capacity, parse_requested_deadline
+from text2business.decision import clarification_decision, final_decision, handoff_decision
+from text2business.drafting import (
+    DeterministicResponseDrafter,
+    GatewayResponseDrafter,
+    ResponseDrafterPort,
+)
+from text2business.extractor import (
+    DeterministicExtractor,
+    ExtractorPort,
+    GatewayExtractor,
+    build_extractor_from_env,
+)
+from text2business.gateway import GatewayError
 from text2business.harness import HarnessGuard
 from text2business.models import (
     Action,
+    Asset,
+    AssetMatch,
+    AutomationAssessment,
+    CapacityAssessment,
     CaseResult,
+    Contract,
+    Customer,
+    CustomerMatch,
     Decision,
+    DraftResponse,
+    ExtractedFacts,
     FindAssetsInput,
-    FindOpenTicketsInput,
-    FindSiteInput,
+    FindCustomersInput,
+    FindSitesInput,
+    FindTicketsInput,
+    GetCapacityInput,
     GetContractInput,
+    GetCustomerInput,
     IncomingRequest,
-    JsonValue,
-    TicketMutationInput,
+    Priority,
+    PriorityAssessment,
+    PriorityOverride,
+    RepeatAssessment,
+    ReviewStatus,
+    RunLimits,
+    Site,
+    SiteMatch,
+    SlaAssessment,
     TerminalState,
+    Ticket,
+    TicketChangeProposal,
+    TicketChangeProposalOutput,
     TraceEvent,
     TraceKind,
 )
-from text2business.rules import assess_priority, calculate_sla
-from text2business.tools import MockCorporateTools
+from text2business.priority import apply_priority_override, assess_priority
+from text2business.proposal import build_ticket_change_proposal, deterministic_response
+from text2business.repeat import RepeatResolution, classify_repeat
+from text2business.repository import JsonCorporateRepository, normalize_text
+from text2business.resolution import resolve_unique_asset, resolve_unique_site
+from text2business.sla import calculate_sla
 
 
-def _json_dict(model: object) -> dict[str, JsonValue]:
-    return model.model_dump(mode="json")  # type: ignore[union-attr,return-value]
+ModelT = TypeVar("ModelT", bound=BaseModel)
+
+
+def _json_dict(model: BaseModel) -> dict[str, JsonValue]:
+    return model.model_dump(mode="json")  # type: ignore[return-value]
 
 
 def _trace(
@@ -45,248 +91,470 @@ def _trace(
     )
 
 
+def _call_tool(
+    guard: HarnessGuard,
+    trace: list[TraceEvent],
+    name: str,
+    payload: BaseModel,
+    function: Callable[[Any], ModelT],
+    *,
+    proposal: bool = False,
+) -> ModelT:
+    input_data = _json_dict(payload)
+    guard.before_tool(name, input_data, proposal=proposal)
+    output = function(payload)
+    _trace(trace, TraceKind.PROPOSAL if proposal else TraceKind.TOOL, name, input_data, _json_dict(output))
+    return output
+
+
+def _customer_conflicts(customer: Customer, facts: ExtractedFacts) -> bool:
+    if facts.customer_name is None:
+        return False
+    extracted = normalize_text(str(facts.customer_name.value))
+    labels = [normalize_text(customer.name), *(normalize_text(alias) for alias in customer.aliases)]
+    return not any(extracted == label for label in labels)
+
+
+def _fact_is_true(value: object) -> bool:
+    return value is True or (isinstance(value, str) and value.casefold() == "true")
+
+
 def run_case(
     request: IncomingRequest,
     *,
-    extractor: DeterministicExtractor | None = None,
-    tools: MockCorporateTools | None = None,
+    extractor: ExtractorPort | None = None,
+    repository: JsonCorporateRepository | None = None,
+    drafter: ResponseDrafterPort | None = None,
+    limits: RunLimits | None = None,
 ) -> CaseResult:
-    extractor = extractor or DeterministicExtractor()
-    tools = tools or MockCorporateTools()
-    guard = HarnessGuard(request)
+    """Run one bounded triage pipeline and return exactly one typed terminal result."""
+
+    selected_extractor = extractor or build_extractor_from_env()
+    selected_repository = repository or JsonCorporateRepository()
+    if drafter is not None:
+        selected_drafter = drafter
+    elif isinstance(selected_extractor, GatewayExtractor):
+        selected_drafter = GatewayResponseDrafter(selected_extractor.client)
+    else:
+        selected_drafter = DeterministicResponseDrafter()
+
+    guard = HarnessGuard(request, limits)
     trace: list[TraceEvent] = []
+    facts = ExtractedFacts()
+    customer_candidates: list[CustomerMatch] = []
+    site_candidates: list[SiteMatch] = []
+    asset_candidates: list[AssetMatch] = []
+    customer: Customer | None = None
+    site: Site | None = None
+    asset: Asset | None = None
+    contract: Contract | None = None
+    tickets: list[Ticket] = []
+    repeat: RepeatAssessment | None = None
+    repeat_resolution: RepeatResolution | None = None
+    priority: PriorityAssessment | None = None
+    sla: SlaAssessment | None = None
+    capacity: CapacityAssessment | None = None
+    proposal: TicketChangeProposalOutput | None = None
+    clarification_questions: list[str] = []
+    warnings: list[str] = []
 
-    facts = extractor.extract(request)
-    _trace(
-        trace,
-        TraceKind.EXTRACTION,
-        "deterministic_extraction",
-        {"text": request.text},
-        _json_dict(facts),
-    )
-
-    if facts.suspicious_instruction is not None:
-        decision = Decision(
-            action=Action.HANDOFF_TO_DISPATCHER,
-            reason_codes=["PROMPT_INJECTION_DETECTED", "UNTRUSTED_INPUT"],
-            explanation="Инструкции внутри клиентского текста не могут управлять tools.",
-            requires_human_confirmation=True,
-        )
-        _trace(
-            trace,
-            TraceKind.RULE,
-            "untrusted_input_guard",
-            {"evidence": facts.suspicious_instruction.evidence},
-            {"action": decision.action, "mutation_allowed": False},
-        )
+    def finish(
+        decision: Decision,
+        terminal_state: TerminalState,
+        *,
+        clarification: str | None = None,
+    ) -> CaseResult:
+        nonlocal warnings
+        effective_drafter: ResponseDrafterPort = selected_drafter
+        if isinstance(effective_drafter, GatewayResponseDrafter) and guard.remaining_model_calls == 0:
+            effective_drafter = DeterministicResponseDrafter()
+            warnings.append("MODEL_BUDGET_EXHAUSTED: deterministic response template used")
+        try:
+            draft = effective_drafter.draft(
+                asset=asset,
+                site=site,
+                priority=priority,
+                sla=sla,
+                capacity=capacity,
+                decision=decision,
+                clarification=clarification,
+                on_model_call=guard.before_model,
+            )
+        except (GatewayError, RuntimeError):
+            draft = deterministic_response(
+                asset,
+                site,
+                priority,
+                sla,
+                capacity,
+                clarification=clarification,
+                handed_off=True,
+            )
+            warnings.append("MODEL_DRAFT_FAILED: deterministic response template used")
+        warnings.extend(draft.warnings)
         return CaseResult(
-            run=guard.finish(TerminalState.HANDED_OFF),
+            run=guard.finish(terminal_state),
             request=request,
             facts=facts,
-            site_candidates=[],
-            asset_candidates=[],
-            resolved_site=None,
-            resolved_asset=None,
-            contract=None,
-            open_tickets=[],
-            priority=None,
-            sla=None,
-            decision=decision,
-            mutation=None,
-            draft_response="Обращение передано диспетчеру для безопасной проверки.",
-            clarification_questions=[],
-            warnings=["Prompt injection was treated as untrusted data; no tool was called"],
-            trace=trace,
-        )
-
-    site_query = " ".join(
-        str(fact.value) for fact in (facts.customer, facts.site) if fact is not None
-    )
-    site_input = FindSiteInput(query=site_query)
-    guard.before_tool()
-    site_output = tools.find_customer_or_site(site_input)
-    _trace(trace, TraceKind.TOOL, "find_customer_or_site", _json_dict(site_input), _json_dict(site_output))
-
-    top_score = site_output.matches[0].score if site_output.matches else 0
-    top_sites = [match for match in site_output.matches if match.score == top_score]
-    if len(top_sites) != 1 or top_score < 4:
-        decision = Decision(
-            action=Action.REQUEST_CLARIFICATION,
-            reason_codes=["SITE_AMBIGUOUS"],
-            explanation="Объект нельзя выбрать однозначно.",
-            requires_human_confirmation=True,
-        )
-        return CaseResult(
-            run=guard.finish(TerminalState.NEEDS_USER_INPUT),
-            request=request,
-            facts=facts,
-            site_candidates=site_output.matches,
-            asset_candidates=[],
-            resolved_site=None,
-            resolved_asset=None,
-            contract=None,
-            open_tickets=[],
-            priority=None,
-            sla=None,
-            decision=decision,
-            mutation=None,
-            draft_response="Уточните, пожалуйста, адрес объекта.",
-            clarification_questions=["Уточните точный адрес объекта."],
-            warnings=["Ticket mutation was not attempted"],
-            trace=trace,
-        )
-
-    site = top_sites[0].site
-    asset_input = FindAssetsInput(
-        site_id=site.site_id,
-        query=str(facts.asset.value) if facts.asset else "",
-    )
-    guard.before_tool()
-    asset_output = tools.find_assets(asset_input)
-    _trace(trace, TraceKind.TOOL, "find_assets", _json_dict(asset_input), _json_dict(asset_output))
-    if len(asset_output.matches) != 1:
-        decision = Decision(
-            action=Action.REQUEST_CLARIFICATION,
-            reason_codes=["ASSET_AMBIGUOUS"],
-            explanation="Оборудование нельзя выбрать однозначно.",
-            requires_human_confirmation=True,
-        )
-        return CaseResult(
-            run=guard.finish(TerminalState.NEEDS_USER_INPUT),
-            request=request,
-            facts=facts,
-            site_candidates=site_output.matches,
-            asset_candidates=asset_output.matches,
-            resolved_site=site,
-            resolved_asset=None,
-            contract=None,
-            open_tickets=[],
-            priority=None,
-            sla=None,
-            decision=decision,
-            mutation=None,
-            draft_response="Уточните, пожалуйста, код оборудования.",
-            clarification_questions=["Уточните точный код оборудования."],
-            warnings=["Ticket mutation was not attempted"],
-            trace=trace,
-        )
-
-    asset = asset_output.matches[0].asset
-    contract_input = GetContractInput(site_id=site.site_id)
-    guard.before_tool()
-    contract_output = tools.get_contract(contract_input)
-    _trace(trace, TraceKind.TOOL, "get_contract", _json_dict(contract_input), _json_dict(contract_output))
-    if contract_output.contract is None:
-        raise ValueError(f"No contract for site {site.site_id}")
-    contract = contract_output.contract
-
-    tickets_input = FindOpenTicketsInput(
-        customer_id=site.customer_id,
-        site_id=site.site_id,
-        asset_id=asset.asset_id,
-    )
-    guard.before_tool()
-    tickets_output = tools.find_open_tickets(tickets_input)
-    _trace(trace, TraceKind.TOOL, "find_open_tickets", _json_dict(tickets_input), _json_dict(tickets_output))
-
-    if len(tickets_output.tickets) > 1:
-        decision = Decision(
-            action=Action.HANDOFF_TO_DISPATCHER,
-            reason_codes=["MULTIPLE_OPEN_TICKETS"],
-            explanation="Найдено несколько открытых заявок по одному оборудованию.",
-            requires_human_confirmation=True,
-        )
-        return CaseResult(
-            run=guard.finish(TerminalState.HANDED_OFF),
-            request=request,
-            facts=facts,
-            site_candidates=site_output.matches,
-            asset_candidates=asset_output.matches,
+            customer_candidates=customer_candidates,
+            site_candidates=site_candidates,
+            asset_candidates=asset_candidates,
+            resolved_customer=customer,
             resolved_site=site,
             resolved_asset=asset,
             contract=contract,
-            open_tickets=tickets_output.tickets,
-            priority=None,
-            sla=None,
+            tickets=tickets,
+            repeat=repeat,
+            priority=priority,
+            sla=sla,
+            capacity=capacity,
             decision=decision,
-            mutation=None,
-            draft_response="Обращение передано диспетчеру для проверки открытых заявок.",
-            clarification_questions=[],
-            warnings=["Ticket mutation was not attempted"],
+            proposal=proposal,
+            draft_response=draft,
+            clarification_questions=clarification_questions,
+            warnings=warnings,
             trace=trace,
         )
 
-    priority = assess_priority(asset, facts)
-    sla = calculate_sla(request, contract)
-    _trace(
-        trace,
-        TraceKind.RULE,
-        "business_rules",
-        {"asset_id": asset.asset_id, "contract_id": contract.contract_id},
-        {"priority": priority.model_dump(mode="json"), "sla": sla.model_dump(mode="json")},
-    )
+    try:
+        facts = selected_extractor.extract(request, on_model_call=guard.before_model)
+        extraction_kind = (
+            TraceKind.MODEL if isinstance(selected_extractor, GatewayExtractor) else TraceKind.EXTRACTION
+        )
+        _trace(
+            trace,
+            extraction_kind,
+            "structured_extraction",
+            {"channel": request.channel, "text_length": len(request.text)},
+            _json_dict(facts),
+        )
 
-    action = Action.UPDATE_EXISTING if tickets_output.tickets else Action.CREATE_NEW
-    expected_version = tickets_output.tickets[0].version if tickets_output.tickets else 0
-    explanation = (
-        "Найдена одна открытая заявка по подтверждённому оборудованию."
-        if tickets_output.tickets
-        else "Объект и оборудование определены однозначно; открытых заявок нет."
-    )
-    decision = Decision(
-        action=action,
-        reason_codes=["SITE_UNIQUE", "ASSET_UNIQUE", "OPEN_TICKET_FOUND" if tickets_output.tickets else "NO_OPEN_TICKET"],
-        explanation=explanation,
-        requires_human_confirmation=True,
-    )
+        if facts.suspicious_instruction is not None:
+            warnings.append("Untrusted instruction detected; no corporate tool was called")
+            return finish(
+                handoff_decision(
+                    "PROMPT_INJECTION_DETECTED",
+                    "Инструкции внутри клиентского текста не могут управлять системой.",
+                ),
+                TerminalState.HANDED_OFF,
+            )
 
-    fingerprint = f"{request.model_dump_json()}|{action}|{asset.asset_id}"
-    mutation_input = TicketMutationInput(
-        idempotency_key=hashlib.sha256(fingerprint.encode()).hexdigest(),
-        expected_version=expected_version,
-        operation=action,
-        proposed_payload={
-            "customer_id": site.customer_id,
-            "site_id": site.site_id,
-            "asset_id": asset.asset_id,
-            "summary": str(facts.problem.value) if facts.problem else request.text,
-            "priority": priority.priority,
-            "sla_deadline": sla.deadline.isoformat(),
-            "source_channel": request.channel,
-        },
-    )
-    guard.before_tool(mutation=True)
-    mutation = tools.create_or_update_ticket(mutation_input)
-    _trace(
-        trace,
-        TraceKind.MUTATION,
-        "create_or_update_ticket",
-        _json_dict(mutation_input),
-        _json_dict(mutation),
-    )
+        identity = request.identity
+        if identity is None or not identity.verified:
+            customer_query = (
+                str(facts.customer_name.value)
+                if facts.customer_name
+                else request.sender_display or ""
+            )
+            matches = _call_tool(
+                guard,
+                trace,
+                "find_customers",
+                FindCustomersInput(query=customer_query),
+                selected_repository.find_customers,
+            )
+            customer_candidates = matches.matches
+            warnings.append("Trusted CRM customer ID is required before a proposal")
+            return finish(
+                handoff_decision(
+                    "TRUSTED_IDENTITY_MISSING",
+                    "Клиента должен подтвердить диспетчер по данным CRM.",
+                ),
+                TerminalState.HANDED_OFF,
+            )
 
-    operation_label = "Обновление" if action == Action.UPDATE_EXISTING else "Создание"
-    draft_response = (
-        f"Приняли обращение по {asset.local_code} на объекте {site.address}. "
-        f"Предварительный приоритет — {priority.priority}; срок первичного ответа по договору — "
-        f"до {sla.deadline:%d.%m.%Y %H:%M %Z}. {operation_label} заявки ожидает подтверждения диспетчера."
+        customer_output = _call_tool(
+            guard,
+            trace,
+            "get_customer",
+            GetCustomerInput(customer_id=identity.customer_id),
+            selected_repository.get_customer,
+        )
+        customer = customer_output.customer
+        if customer is None:
+            warnings.append("Trusted CRM customer ID was not found")
+            return finish(
+                handoff_decision("CUSTOMER_NOT_FOUND", "Клиент из CRM не найден."),
+                TerminalState.HANDED_OFF,
+            )
+        if _customer_conflicts(customer, facts):
+            warnings.append("CRM identity conflicts with the customer named in text")
+            return finish(
+                handoff_decision(
+                    "CRM_TEXT_CONFLICT",
+                    "Клиент в тексте не совпадает с доверенной CRM identity.",
+                ),
+                TerminalState.HANDED_OFF,
+            )
+
+        site_query = str(facts.site_reference.value) if facts.site_reference else ""
+        site_output = _call_tool(
+            guard,
+            trace,
+            "find_sites",
+            FindSitesInput(customer_id=customer.customer_id, query=site_query),
+            selected_repository.find_sites,
+        )
+        site_candidates = site_output.matches
+        site = resolve_unique_site(site_candidates)
+        if site is None:
+            question = "Уточните точный адрес объекта."
+            clarification_questions.append(question)
+            warnings.append("Site ambiguity was not resolved automatically")
+            return finish(
+                clarification_decision("SITE_AMBIGUOUS", "Объект нельзя выбрать однозначно."),
+                TerminalState.NEEDS_USER_INPUT,
+                clarification=question,
+            )
+
+        asset_query = str(facts.asset_reference.value) if facts.asset_reference else ""
+        asset_output = _call_tool(
+            guard,
+            trace,
+            "find_assets",
+            FindAssetsInput(site_id=site.site_id, query=asset_query),
+            selected_repository.find_assets,
+        )
+        asset_candidates = asset_output.matches
+        asset = resolve_unique_asset(asset_candidates)
+        if asset is None:
+            question = "Уточните точный код оборудования."
+            clarification_questions.append(question)
+            warnings.append("Asset ambiguity was not resolved automatically")
+            return finish(
+                clarification_decision("ASSET_AMBIGUOUS", "Оборудование нельзя выбрать однозначно."),
+                TerminalState.NEEDS_USER_INPUT,
+                clarification=question,
+            )
+
+        contract_output = _call_tool(
+            guard,
+            trace,
+            "get_contract",
+            GetContractInput(site_id=site.site_id),
+            selected_repository.get_contract,
+        )
+        contract = contract_output.contract
+        if contract is None:
+            warnings.append("Contract and SLA are unavailable")
+            return finish(
+                handoff_decision("CONTRACT_NOT_FOUND", "Договор обслуживания не найден."),
+                TerminalState.HANDED_OFF,
+            )
+
+        tickets_output = _call_tool(
+            guard,
+            trace,
+            "find_tickets",
+            FindTicketsInput(
+                customer_id=customer.customer_id,
+                site_id=site.site_id,
+                asset_id=asset.asset_id,
+            ),
+            selected_repository.find_tickets,
+        )
+        tickets = tickets_output.tickets
+        repeat_resolution = classify_repeat(tickets, request.received_at)
+        repeat = repeat_resolution.assessment
+        if repeat_resolution.multiple_open:
+            warnings.append("Multiple open tickets require manual selection")
+            return finish(
+                handoff_decision(
+                    "MULTIPLE_OPEN_TICKETS",
+                    "Найдено несколько открытых заявок по одному оборудованию.",
+                ),
+                TerminalState.HANDED_OFF,
+            )
+
+        capacity_output = _call_tool(
+            guard,
+            trace,
+            "get_capacity",
+            GetCapacityInput(service_group=asset.service_group, region=site.region),
+            selected_repository.get_capacity,
+        )
+
+        priority = assess_priority(asset, facts)
+        sla = calculate_sla(
+            request.received_at,
+            site,
+            contract,
+            open_repeat_ticket=repeat_resolution.open_ticket,
+        )
+        requested_by = parse_requested_deadline(
+            facts.desired_deadline,
+            request.received_at,
+            site.timezone,
+        )
+        capacity = assess_capacity(asset, site, capacity_output.capacity, requested_by)
+        _trace(
+            trace,
+            TraceKind.RULE,
+            "domain_assessments",
+            {"asset_id": asset.asset_id, "contract_id": contract.contract_id},
+            {
+                "repeat": repeat.model_dump(mode="json"),
+                "priority": priority.model_dump(mode="json"),
+                "sla": sla.model_dump(mode="json"),
+                "capacity": capacity.model_dump(mode="json"),
+            },
+        )
+
+        if contract.plan != "Gold":
+            warnings.append("Holiday calendars are outside MVP; weekdays only")
+        if repeat_resolution.open_ticket:
+            remaining = sla.deadline - request.received_at.astimezone(sla.deadline.tzinfo)
+            if remaining <= timedelta(0):
+                warnings.append("SLA_BREACHED")
+            elif remaining <= timedelta(minutes=30):
+                warnings.append("SLA_AT_RISK")
+
+        base_action = (
+            Action.UPDATE_EXISTING if repeat_resolution.open_ticket else Action.CREATE_NEW
+        )
+        approval_required = bool(
+            facts.requires_additional_approval
+            and _fact_is_true(facts.requires_additional_approval.value)
+        )
+        decision = final_decision(
+            base_action,
+            priority.effective,
+            requires_additional_approval=approval_required,
+        )
+
+        if not approval_required:
+            proposal_input = build_ticket_change_proposal(
+                request,
+                customer,
+                site,
+                asset,
+                facts,
+                priority,
+                sla,
+                repeat,
+                open_ticket=repeat_resolution.open_ticket,
+            )
+            proposal = _call_tool(
+                guard,
+                trace,
+                "propose_ticket_change",
+                proposal_input,
+                selected_repository.propose_ticket_change,
+                proposal=True,
+            )
+            warnings.extend(proposal.warnings)
+
+        terminal = (
+            TerminalState.COMPLETED
+            if decision.review_status == ReviewStatus.READY_FOR_REVIEW
+            else TerminalState.HANDED_OFF
+        )
+        return finish(decision, terminal)
+    except GatewayError as exc:
+        warnings.append(str(exc))
+        _trace(
+            trace,
+            TraceKind.RULE,
+            "controlled_gateway_failure",
+            {},
+            {"error": type(exc).__name__},
+        )
+        return finish(
+            handoff_decision("EXTRACTION_FAILED", "Извлечение не завершено; нужна ручная проверка."),
+            TerminalState.FAILED,
+        )
+    except (RuntimeError, ValueError) as exc:
+        proposal = None
+        warnings.append(str(exc))
+        _trace(
+            trace,
+            TraceKind.RULE,
+            "controlled_run_failure",
+            {},
+            {"error": type(exc).__name__},
+        )
+        return finish(
+            handoff_decision("RUN_FAILED", "Обработка остановлена; нужна ручная проверка."),
+            TerminalState.FAILED,
+        )
+
+
+def apply_dispatcher_priority_override(
+    result: CaseResult,
+    override: PriorityOverride,
+) -> CaseResult:
+    """Apply an in-memory dispatcher correction without creating an external write."""
+
+    if result.priority is None:
+        raise ValueError("priority is unavailable for override")
+    updated_priority = apply_priority_override(result.priority, override)
+
+    updated_proposal = result.proposal
+    if updated_proposal is not None:
+        payload = dict(updated_proposal.proposal.proposed_payload)
+        payload["priority"] = updated_priority.effective
+        proposal_model: TicketChangeProposal = updated_proposal.proposal.model_copy(
+            update={"proposed_payload": payload}
+        )
+        updated_proposal = updated_proposal.model_copy(update={"proposal": proposal_model})
+
+    action = (
+        updated_proposal.proposal.operation
+        if updated_proposal is not None
+        else result.decision.action
     )
-    return CaseResult(
-        run=guard.finish(TerminalState.COMPLETED),
-        request=request,
-        facts=facts,
-        site_candidates=site_output.matches,
-        asset_candidates=asset_output.matches,
-        resolved_site=site,
-        resolved_asset=asset,
-        contract=contract,
-        open_tickets=tickets_output.tickets,
-        priority=priority,
-        sla=sla,
-        decision=decision,
-        mutation=mutation,
-        draft_response=draft_response,
-        clarification_questions=[],
-        warnings=mutation.warnings,
-        trace=trace,
+    must_handoff = (
+        result.priority.calculated == Priority.P1
+        or updated_priority.effective == Priority.P1
+        or result.decision.action == Action.REQUIRES_ADDITIONAL_APPROVAL
+    )
+    updated_decision = result.decision.model_copy(
+        update={
+            "action": action,
+            "review_status": (
+                ReviewStatus.NEEDS_DISPATCHER_REVIEW
+                if must_handoff
+                else result.decision.review_status
+            ),
+            "automation_assessment": (
+                AutomationAssessment.HUMAN_REQUIRED
+                if must_handoff
+                else result.decision.automation_assessment
+            ),
+            "reason_codes": [*result.decision.reason_codes, "PRIORITY_OVERRIDDEN"],
+        }
+    )
+    updated_trace = [
+        *result.trace,
+        TraceEvent(
+            step=len(result.trace) + 1,
+            kind=TraceKind.REVIEW,
+            name="dispatcher_priority_override",
+            input={
+                "priority": override.priority,
+                "reason": override.reason,
+                "actor": override.actor,
+            },
+            output={
+                "calculated": updated_priority.calculated,
+                "effective": updated_priority.effective,
+            },
+        ),
+    ]
+    updated_draft: DraftResponse = deterministic_response(
+        result.resolved_asset,
+        result.resolved_site,
+        updated_priority,
+        result.sla,
+        result.capacity,
+        handed_off=must_handoff,
+    )
+    return result.model_copy(
+        update={
+            "priority": updated_priority,
+            "decision": updated_decision,
+            "proposal": updated_proposal,
+            "draft_response": updated_draft,
+            "trace": updated_trace,
+        }
     )

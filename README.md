@@ -1,6 +1,6 @@
 # Text2Business AI Dispatcher
 
-Демонстрационный вертикальный срез: свободный текст сервисной заявки преобразуется в проверенные факты, корпоративные данные, детерминированное решение и безопасный dry-run создания тикета.
+Прототип сокращает ручной триаж сервисной заявки: извлекает факты с evidence, сверяет их с корпоративными данными, детерминированно считает повтор, приоритет, SLA и доступность команды, а затем готовит безопасное предложение для диспетчера. Реальных изменений во внешних системах нет.
 
 ## Документация
 
@@ -11,18 +11,26 @@
 - [Agent harness](docs/harness.md)
 - [Evals](docs/evals.md)
 - [Метрики](docs/metrics.md)
-- [Спецификация триажа](docs/specifications/service-request-triage/requirements.md)
+- [Требования](docs/specifications/service-request-triage/requirements.md)
+- [Технический дизайн](docs/specifications/service-request-triage/technical-design.md)
+- [План реализации](docs/specifications/service-request-triage/implementation-plan.md)
 
 ## Быстрый запуск
 
-Требуется Python `3.12.14`.
+Нужен Python `3.12.x`.
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.lock
 pip install --no-deps -e .
-python -m text2business.cli
+streamlit run src/text2business/app.py
+```
+
+CLI и тесты:
+
+```bash
+python -m text2business.cli --scenario full
 pytest
 ```
 
@@ -30,24 +38,19 @@ Docker:
 
 ```bash
 docker build -t text2business-demo .
-docker run --rm text2business-demo
+docker run --rm text2business-demo --scenario full
 ```
 
-## Что работает
+## Что реализовано
 
-CLI содержит четыре сценария: полный запрос, неоднозначный запрос, повторное обращение и prompt injection.
+- 11 сценариев, CLI и Streamlit-интерфейс диспетчера;
+- детерминированный fallback и опциональная structured extraction через private AI Gateway;
+- типизированные read-only инструменты над mock CRM/asset/ticket/capacity данными;
+- repeat detection для открытых и недавно закрытых тикетов;
+- правила P1–P4, Gold/Standard/Basic SLA и проверка желаемого времени по capacity;
+- только dry-run `TicketChangeProposal` с обязательным подтверждением человека;
+- лимиты, дедлайн, защита от циклов, безопасный trace и regression tests.
 
-Система:
+## Границы прототипа
 
-1. Детерминированно извлекает факты вместе с evidence.
-2. Через типизированные mock-tools находит объект, оборудование, договор и открытые заявки.
-3. Обычным кодом определяет приоритет и дедлайн SLA.
-4. Создаёт, обновляет, запрашивает уточнение или безопасно отказывается от действия.
-5. Формирует mutation только как dry-run с `idempotency_key`, `expected_version` и подтверждением человека.
-6. Возвращает проект ответа и последовательный trace.
-
-LLM в этом срезе не используется. Корпоративные данные находятся в `src/text2business/data/corporate.json`. Реальных side effects нет.
-
-## Границы
-
-Это демонстрация, а не production-система. Пока не реализованы AI Gateway, Streamlit UI и полноценный календарь рабочих часов.
+Один процесс и синхронное выполнение. Нет очередей, durable execution, HA/DR, autoscaling, праздничного календаря и реальных CRM-записей. Путь развития зафиксирован в [техническом дизайне](docs/specifications/service-request-triage/technical-design.md).

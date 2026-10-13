@@ -1,22 +1,26 @@
 # Метрики
 
-## Бизнес
+## Ключевая цель
 
-- доля корректно маршрутизированных заявок;
-- доля корректно найденных повторных обращений;
-- среднее время до предложения действия;
-- доля заявок, потребовавших уточнения или диспетчера;
-- нарушения SLA из-за ошибочной классификации.
+- полное время человеческого триажа `<= 2 минут` против текущих примерно `12 минут`;
+- SLA в продукте означает время до первого содержательного ответа диспетчера.
 
-## Технические
+## Качество
 
-- extraction field accuracy и evidence coverage;
-- site/asset resolution accuracy;
-- decision accuracy по regression dataset;
-- unsafe auto-action rate — целевое значение `0`;
-- p50/p95 latency;
-- model schema failure и gateway fallback rate;
-- среднее число tool calls на run.
+- accuracy/coverage извлечённых полей и evidence;
+- accuracy customer/site/asset resolution;
+- accuracy repeat detection отдельно для open и closed <= 30 дней;
+- доля повторных обращений как косвенная метрика качества поддержки;
+- accuracy P1–P4, SLA deadline, action и capacity feasibility;
+- dispatcher override rate и причины;
+- unsafe applied action rate: целевое значение `0`.
 
-В текущем прототипе regression pass rate собирается через Pytest, а tool calls и решения видны в `trace`. Production telemetry не входит в scope.
+## Выполнение
 
+- p50/p95 end-to-end latency;
+- clarification/handoff/approval rate;
+- gateway schema failure и deterministic fallback rate;
+- tool/model call count и limit violation rate;
+- proposal acceptance/rejection rate и время review.
+
+В прототипе regression pass rate проверяет Pytest, а счётчики и reason codes видны в `CaseResult`. Production telemetry и dashboard не входят в scope.

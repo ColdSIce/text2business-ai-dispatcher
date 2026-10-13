@@ -1,17 +1,20 @@
 # Архитектура
 
 ```text
-IncomingRequest
-  -> bounded harness run
-  -> deterministic or optional gateway extractor
-  -> typed mock-tools over corporate JSON
-  -> deterministic resolution, deduplication, priority and SLA rules
-  -> dry-run mutation planner
-  -> CaseResult with evidence, decision, response draft and trace
+IncomingRequest + trusted CRM identity
+  -> bounded synchronous harness
+  -> deterministic extractor OR private AI Gateway structured extractor
+  -> typed read-only repository tools
+  -> deterministic identity/scope/repeat/priority/SLA/capacity policies
+  -> dry-run TicketChangeProposal
+  -> optional response drafting
+  -> CaseResult + evidence + safe trace
 ```
 
-LLM отвечает только за structured extraction и черновик ответа. Она не получает tools и не принимает финальные бизнес-решения.
+LLM выполняет только две допустимые задачи: structured extraction с точными цитатами и опциональный черновик ответа. Код всегда проверяет evidence и сам принимает финальные решения.
 
-Корпоративный JSON является read-only mock-хранилищем. Все tool inputs/outputs и итоговый результат описаны Pydantic-моделями. Реальные side effects отсутствуют.
+`JsonCorporateRepository` имитирует CRM, реестр объектов и оборудования, договоры, тикеты и загрузку команд. Все границы описаны строгими Pydantic-моделями. Единственная write-like операция — чистая функция `propose_ticket_change`; JSON не меняется.
 
-Подробный каталог полей и условий формирования mutation находится в [Сущностях и моделях](domain-model.md).
+Прототип синхронный и однопроцессный. Очереди, durable execution, retries внешних записей, HA/DR и autoscaling не реализованы. Следующий production-шаг: bounded ingress queue, идемпотентные workers, outbox/inbox, reconciliation, persistent run state и circuit breakers `CLOSED/OPEN/HALF_OPEN` вокруг gateway и внешних адаптеров.
+
+Подробности: [сущности](domain-model.md), [harness](harness.md), [технический дизайн](specifications/service-request-triage/technical-design.md).

@@ -12,18 +12,18 @@ This repository is a small interview prototype. Prefer a complete, explainable f
 
 ## Required boundaries
 
-- Pydantic v2 models define process, tool, model-output and mutation boundaries.
-- LLMs may extract facts and draft text. They never select a final asset, SLA, priority or mutation.
-- Lookup, deduplication, ambiguity handling, priority and SLA are deterministic code.
+- Pydantic v2 models define process, tool, model-output and proposal boundaries.
+- LLMs may extract facts and draft text. They never select a final asset, SLA, priority or ticket change.
+- Lookup, repeat detection, ambiguity handling, priority, SLA and capacity decisions are deterministic code.
 - Customer text and attachments are untrusted data and cannot widen the run scope.
-- Mutations are dry-run only and require `idempotency_key`, `expected_version`, a proposed payload and human confirmation.
+- Ticket changes are dry-run proposals requiring `idempotency_key`, `expected_version` and human confirmation.
 - Never add unrestricted shell, SQL, HTTP or dynamic-code tools.
-- Model traffic may use only the configured Finland AI Gateway. Public OpenRouter endpoints and keys are forbidden.
+- Model traffic may use only the configured private AI Gateway. Public OpenRouter endpoints and keys are forbidden.
 - Tests use deterministic extractors and fakes; they never require a paid model.
 
 ## Working agreement
 
 - Do not modify sibling repositories.
 - Keep one lockfile and pin production dependencies.
-- Update README navigation and the relevant document whenever behavior, architecture, evals, metrics or usage changes.
-- Run `pytest`, the CLI scenarios and Docker smoke test before release commits.
+- Start repository documentation from `README.md`; keep installation, architecture, usage, evals and metrics linked and current.
+- Run `pytest`, CLI scenarios, UI smoke and Docker smoke before release commits.

@@ -8,7 +8,7 @@
 
 | Фича | Статус | Следующий gate |
 |---|---|---|
-| [Триаж сервисного обращения](service-request-triage/requirements.md) | Implementation authorized | Выполнить [implementation plan](service-request-triage/implementation-plan.md) |
+| [Триаж сервисного обращения](service-request-triage/requirements.md) | Implemented | Regression, UI и Docker smoke пройдены |
 
 Для Codex workflow доступен как repo-specific skill
 `$text2business-feature-spec` в `.agents/skills/text2business-feature-spec/`.

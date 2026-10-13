@@ -4,7 +4,7 @@
 
 **Дата:** 2026-10-13
 
-**Следующий gate:** подготовить и согласовать technical design.
+**Результат:** реализовано по согласованному technical design; acceptance покрыт tests.
 
 ## 1. Проблема и контекст
 
@@ -16,7 +16,7 @@
 Прототип должен быстро подготовить объяснимый результат триажа. Он не заменяет
 диспетчера и не создаёт/изменяет реальные заявки.
 
-## 2. Подтверждённое текущее состояние
+## 2. Базовое состояние до реализации
 
 - Есть CLI, типизированные Pydantic v2 модели, read-only корпоративный JSON,
   deterministic extractor/rules, bounded harness, trace и четыре regression-сценария.
@@ -24,8 +24,8 @@
 - Текущий повтор определяется только по открытой заявке на оборудование.
 - Вход пока содержит строку `sender`, но не доверенный CRM customer/contact ID.
 - Нет модели загрузки сервисных команд и `customer_requested_by`.
-- Поле `mutation` фактически является dry-run предложением; бизнес-термин должен
-  быть «предлагаемое изменение заявки».
+- Старое поле изменения заявки должно быть заменено бизнес-моделью
+  «предлагаемое изменение заявки».
 - Реальных внешних side effects и production-данных нет; миграция данных не нужна.
 
 Эти пункты описывают реализацию, а не отменяют целевые требования ниже.
@@ -233,7 +233,7 @@ SLA означает срок первого содержательного от
 | `PriorityAssessment` | Рассчитанный и итоговый P1–P4, reason codes и опциональный обоснованный override; исходный расчёт не перезаписывается. |
 | `SlaAssessment` | Тип SLA, timezone-aware deadline, service window и reason codes. |
 | `Decision` | Одно предлагаемое действие, explanation, reason codes, review status и automation assessment. |
-| `TicketChangeProposal` | Dry-run create/update с idempotency key, expected version, payload и `requires_human_confirmation=true`; бизнес-замена термина mutation. |
+| `TicketChangeProposal` | Dry-run create/update с idempotency key, expected version, payload и `requires_human_confirmation=true`. |
 | `DraftResponse` | Черновик сообщения клиенту с SLA первичного ответа и без неподтверждённого обещания выезда. |
 | `TraceEvent` | Безопасный факт о шаге extraction/tool/rule/proposal; не содержит chain-of-thought, секреты или полный provider payload. |
 | `CaseResult` | Единый итог run: вход, факты, найденные сущности, assessments, decision, proposal, ответ, вопросы, warnings и trace. |
@@ -311,8 +311,8 @@ SLA означает срок первого содержательного от
 
 - Production migration отсутствует: используются fixtures.
 - CLI сценарии сохраняются; новые поля добавляются типизированно и обновляют fixtures.
-- Переименование code-level `TicketMutation*` в `TicketChangeProposal*` выполняется
-  атомарно вместе с docs/tests, без двух постоянных канонических терминов.
+- Переход на code-level `TicketChangeProposal*` выполняется атомарно вместе с
+  docs/tests, без двух постоянных канонических терминов.
 
 ## 17. Acceptance criteria
 
