@@ -23,8 +23,7 @@ This repository is a small interview prototype. Prefer a complete, explainable f
 
 ## Working agreement
 
-- Do not modify LastRoom or sibling repositories.
+- Do not modify sibling repositories.
 - Keep one lockfile and pin production dependencies.
 - Update README navigation and the relevant document whenever behavior, architecture, evals, metrics or usage changes.
 - Run `pytest`, the CLI scenarios and Docker smoke test before release commits.
-

@@ -11,6 +11,7 @@
 - [Agent harness](docs/harness.md)
 - [Evals](docs/evals.md)
 - [Метрики](docs/metrics.md)
+- [Спецификация триажа](docs/specifications/service-request-triage/requirements.md)
 
 ## Быстрый запуск
 

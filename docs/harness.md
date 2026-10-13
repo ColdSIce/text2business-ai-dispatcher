@@ -29,5 +29,4 @@
 
 В trace не попадают секреты, chain-of-thought и полные provider payloads. Для демо trace содержит только факты, вызванные tools, reason codes и подтверждённые результаты.
 
-DBOS, PostgreSQL, Redis, streaming и recovery workflow из LastRoom сознательно не перенесены: они не дают ценности четырёхчасовому локальному прототипу без реальных side effects.
-
+DBOS, PostgreSQL, Redis, streaming и recovery workflow сознательно не используются: они не дают ценности четырёхчасовому локальному прототипу без реальных side effects.
