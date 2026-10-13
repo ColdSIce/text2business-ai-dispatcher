@@ -17,6 +17,7 @@ from text2business.models import (
     SlaAssessment,
 )
 from text2business.proposal import deterministic_response
+from text2business.prompts import DEFAULT_DRAFTING_PROMPT
 
 
 class ResponseDrafterPort(Protocol):
@@ -67,14 +68,16 @@ class DeterministicResponseDrafter:
 class GatewayResponseDrafter:
     """Optional second model call constrained to a validated response schema."""
 
-    SYSTEM_PROMPT = (
-        "Write a concise Russian customer-service draft from confirmed fields only. "
-        "Do not change priority, SLA, action or identifiers. Never promise engineer "
-        "arrival or capacity. Return only the supplied JSON schema."
-    )
+    SYSTEM_PROMPT = DEFAULT_DRAFTING_PROMPT
 
-    def __init__(self, client: StructuredGatewayClient) -> None:
+    def __init__(
+        self,
+        client: StructuredGatewayClient,
+        *,
+        system_prompt: str | None = None,
+    ) -> None:
         self.client = client
+        self.system_prompt = system_prompt or self.SYSTEM_PROMPT
 
     def draft(
         self,
@@ -101,7 +104,7 @@ class GatewayResponseDrafter:
         }
         try:
             raw = self.client.complete_json(
-                system_prompt=self.SYSTEM_PROMPT,
+                system_prompt=self.system_prompt,
                 user_prompt=json.dumps(payload, ensure_ascii=False),
                 response_model=DraftResponse,
             )

@@ -564,3 +564,89 @@ class CaseResult(StrictModel):
     clarification_questions: list[str]
     warnings: list[str]
     trace: list[TraceEvent]
+
+
+class EvalExpectation(StrictModel):
+    """Observable expected outcome for one regression case, without internal details."""
+
+    action: Action = Field(description="Expected business action")
+    review_status: ReviewStatus = Field(description="Expected human-review state")
+    priority: Priority | None = Field(description="Expected effective priority when calculable")
+    repeat_kind: RepeatKind | None = Field(description="Expected repeat classification when reached")
+    expects_proposal: bool = Field(description="Whether one safe dry-run proposal must exist")
+    terminal_state: TerminalState = Field(description="Expected final harness state")
+
+
+class EvalCase(StrictModel):
+    """Human-readable dataset row joining one request with its acceptance oracle."""
+
+    case_id: str = Field(min_length=1, description="Stable unique dataset identifier")
+    title: str = Field(min_length=1, description="Short label shown in the UI")
+    category: str = Field(min_length=1, description="Coverage group such as SLA or safety")
+    polarity: Literal["positive", "negative"] = Field(
+        description="Positive happy/valid flow or negative fail-safe/risk case"
+    )
+    description: str = Field(min_length=1, description="Business behavior exercised by the case")
+    request: IncomingRequest = Field(description="Exact input sent to the workflow")
+    expected: EvalExpectation = Field(description="Only externally observable assertions")
+
+
+class EvalDataset(StrictModel):
+    """Versioned, reviewable collection of deterministic regression cases."""
+
+    name: str = Field(min_length=1, description="Dataset display name")
+    version: str = Field(min_length=1, description="Dataset version independent of application version")
+    description: str = Field(min_length=1, description="Dataset scope and intended use")
+    cases: list[EvalCase] = Field(min_length=1, description="Ordered regression cases")
+
+    @field_validator("cases")
+    @classmethod
+    def require_unique_case_ids(cls, value: list[EvalCase]) -> list[EvalCase]:
+        """Reject ambiguous UI and test references caused by duplicate case IDs."""
+
+        case_ids = [case.case_id for case in value]
+        if len(case_ids) != len(set(case_ids)):
+            raise ValueError("eval case_id values must be unique")
+        return value
+
+
+class EvalAssertion(StrictModel):
+    """One expected-versus-actual comparison shown for an eval execution."""
+
+    name: str = Field(min_length=1, description="Stable assertion field name")
+    expected: JsonValue = Field(description="Dataset oracle value")
+    actual: JsonValue = Field(description="Observed workflow value")
+    passed: bool = Field(description="Whether expected and actual values match")
+
+
+class EvalRun(StrictModel):
+    """Immutable record of one dataset case execution with its result and trace."""
+
+    execution_id: str = Field(min_length=1, description="Unique UI history identifier")
+    case_id: str = Field(min_length=1, description="Source dataset case identifier")
+    case_title: str = Field(min_length=1, description="Snapshot of the case title")
+    executed_at: datetime = Field(description="Timezone-aware execution timestamp")
+    passed: bool = Field(description="True only when every declared assertion passed")
+    assertions: list[EvalAssertion] = Field(description="Expected-versus-actual comparisons")
+    result: CaseResult = Field(description="Complete workflow result including safe trace")
+    execution_mode: Literal["deterministic", "gateway"] = Field(
+        default="deterministic",
+        description="Extractor/drafter path used for this execution",
+    )
+    extraction_prompt: str | None = Field(
+        default=None,
+        description="Gateway extraction prompt snapshot; absent for deterministic runs",
+    )
+    drafting_prompt: str | None = Field(
+        default=None,
+        description="Gateway response-drafting prompt snapshot; absent for deterministic runs",
+    )
+
+    @field_validator("executed_at")
+    @classmethod
+    def require_execution_timezone(cls, value: datetime) -> datetime:
+        """Require an absolute instant so histories can be ordered reliably."""
+
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("executed_at must include a timezone")
+        return value

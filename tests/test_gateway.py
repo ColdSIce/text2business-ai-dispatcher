@@ -15,8 +15,10 @@ class FakeGatewayClient:
 
     def __init__(self, responses: list[str]) -> None:
         self.responses = responses
+        self.calls: list[dict[str, object]] = []
 
-    def complete_json(self, **_: object) -> str:
+    def complete_json(self, **kwargs: object) -> str:
+        self.calls.append(kwargs)
         return self.responses.pop(0)
 
 
@@ -58,6 +60,18 @@ def test_gateway_extractor_repairs_once_then_stops() -> None:
     extractor = GatewayExtractor(FakeGatewayClient([invalid, invalid]))  # type: ignore[arg-type]
     with pytest.raises(GatewayError, match="failed validation"):
         extractor.extract(SCENARIOS["full"])
+
+
+def test_gateway_extractor_accepts_a_reviewable_prompt_override() -> None:
+    client = FakeGatewayClient([_valid_facts()])
+    extractor = GatewayExtractor(  # type: ignore[arg-type]
+        client,
+        system_prompt="case-specific extraction prompt",
+    )
+
+    extractor.extract(SCENARIOS["full"])
+
+    assert client.calls[0]["system_prompt"] == "case-specific extraction prompt"
 
 
 def test_gateway_config_rejects_public_openrouter(monkeypatch: pytest.MonkeyPatch) -> None:
