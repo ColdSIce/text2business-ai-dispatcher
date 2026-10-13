@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+import math
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -256,7 +257,65 @@ def _render_result(
                 st.warning(warning)
 
 
-def _store_eval_runs(runs: list[EvalRun]) -> Path | None:
+def _percentile(values: list[int], quantile: float) -> float:
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * quantile
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return float(ordered[lower])
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+
+def _sla_report(runs: list[EvalRun], target_seconds: int = 30) -> dict[str, Any]:
+    elapsed = [run.result.run.elapsed_ms for run in runs]
+    target_ms = target_seconds * 1000
+    starts = [
+        run.executed_at - timedelta(milliseconds=run.result.run.elapsed_ms) for run in runs
+    ]
+    batch_ms = int((max(run.executed_at for run in runs) - min(starts)).total_seconds() * 1000)
+    within = sum(value <= target_ms for value in elapsed)
+    return {
+        "target_seconds": target_seconds,
+        "within_target_cases": within,
+        "compliance_rate": within / len(runs),
+        "p50_ms": round(_percentile(elapsed, 0.50), 1),
+        "p95_ms": round(_percentile(elapsed, 0.95), 1),
+        "p99_ms": round(_percentile(elapsed, 0.99), 1),
+        "max_ms": max(elapsed),
+        "batch_elapsed_ms": batch_ms,
+    }
+
+
+def _markdown_report(payload: dict[str, Any]) -> str:
+    metrics = payload["metrics"]
+    sla = payload["sla"]
+    model = payload.get("gateway_model") or "deterministic"
+    rows = [
+        "# Отчёт полного eval-прогона",
+        "",
+        f"- Модель: `{model}`",
+        f"- Датасет: `{payload['dataset']['source']}`, версия {payload['dataset']['version']}",
+        f"- Кейсы: {metrics['passed_cases']}/{metrics['cases']} PASS ({metrics['case_pass_rate']:.1%})",
+        f"- Проверки: {metrics['passed_assertions']}/{metrics['assertions']} PASS ({metrics['assertion_pass_rate']:.1%})",
+        f"- SLA ≤{sla['target_seconds']} с: {sla['within_target_cases']}/{metrics['cases']} ({sla['compliance_rate']:.1%})",
+        f"- Latency p50/p95/p99: {sla['p50_ms']/1000:.1f} / {sla['p95_ms']/1000:.1f} / {sla['p99_ms']/1000:.1f} с",
+        f"- Максимум: {sla['max_ms']/1000:.1f} с",
+        f"- Весь batch: {sla['batch_elapsed_ms']/1000:.1f} с",
+        "",
+        "## Метрики по полям",
+        "",
+        "| Поле | Accuracy | Macro F1 |",
+        "|---|---:|---:|",
+    ]
+    rows.extend(
+        f"| {item['field']} | {item['accuracy']:.1%} | {item['macro_f1']:.1%} |"
+        for item in metrics["classification"]
+    )
+    return "\n".join(rows) + "\n"
+
+
+def _store_eval_runs(runs: list[EvalRun], *, model: str | None = None) -> Path | None:
     """Keep UI history and persist a token-free JSON artifact for every batch."""
 
     history = list(st.session_state.get("eval_runs", []))
@@ -276,6 +335,8 @@ def _store_eval_runs(runs: list[EvalRun]) -> Path | None:
             "case_count": len(EVAL_DATASET.cases),
             "source": "src/text2business/data/eval_cases.json",
         },
+        "gateway_model": model,
+        "sla": _sla_report(runs),
         "metrics": calculate_eval_metrics(runs).model_dump(mode="json"),
         "runs": [run.model_dump(mode="json") for run in runs],
     }
@@ -283,6 +344,8 @@ def _store_eval_runs(runs: list[EvalRun]) -> Path | None:
     output_path.write_text(serialized, encoding="utf-8")
     stable_path = output_dir / f"latest-{mode}-{len(runs)}.json"
     stable_path.write_text(serialized, encoding="utf-8")
+    report_path = output_dir / f"latest-{mode}-{len(runs)}.md"
+    report_path.write_text(_markdown_report(payload), encoding="utf-8")
     st.session_state["last_eval_artifact"] = str(stable_path)
     return stable_path
 
@@ -658,7 +721,7 @@ def _render_prompt_lab_tab() -> None:
                 drafting_prompt=drafting_prompt,
                 max_workers=4 if run_regression else 1,
             )
-        artifact_path = _store_eval_runs(runs)
+        artifact_path = _store_eval_runs(runs, model=config.model)
         passed = sum(run.passed for run in runs)
         if passed == len(runs):
             st.success(f"Model-run: {passed}/{len(runs)} PASS. Откройте вкладку «Запуски».")

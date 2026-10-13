@@ -10,3 +10,5 @@ build/
 artifacts/eval-runs/*
 !artifacts/eval-runs/latest-gateway-100.json
 !artifacts/eval-runs/latest-deterministic-100.json
+!artifacts/eval-runs/latest-gateway-100.md
+!artifacts/eval-runs/latest-deterministic-100.md

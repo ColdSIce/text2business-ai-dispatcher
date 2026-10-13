@@ -104,6 +104,7 @@ class StructuredGatewayClient:
 
         payload = {
             "model": self.config.model,
+            "provider": {"require_parameters": True},
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
