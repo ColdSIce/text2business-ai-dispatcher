@@ -89,6 +89,38 @@ def test_gateway_extractor_normalizes_safe_small_model_deviations() -> None:
     assert result.suspicious_instruction is None
 
 
+def test_gateway_extractor_drops_empty_and_false_boolean_fact_objects() -> None:
+    response = json.dumps(
+        {
+            "asset_reference": {
+                "value": "ХУ-18",
+                "evidence": "ХУ-18",
+                "confidence": 1,
+                "provenance": "message",
+            },
+            "suspicious_instruction": {
+                "value": False,
+                "evidence": "ХУ-18",
+                "confidence": 1,
+                "provenance": "message",
+            },
+            "temperature_c": {
+                "value": None,
+                "evidence": None,
+                "confidence": 0,
+                "provenance": None,
+            },
+        },
+        ensure_ascii=False,
+    )
+    extractor = GatewayExtractor(FakeGatewayClient([response]))  # type: ignore[arg-type]
+
+    result = extractor.extract(SCENARIOS["full"])
+
+    assert result.suspicious_instruction is None
+    assert result.temperature_c is None
+
+
 def test_gateway_extractor_accepts_a_reviewable_prompt_override() -> None:
     client = FakeGatewayClient([_valid_facts()])
     extractor = GatewayExtractor(  # type: ignore[arg-type]

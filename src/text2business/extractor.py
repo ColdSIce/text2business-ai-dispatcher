@@ -315,6 +315,14 @@ _CONFIDENCE_ALIASES = {
     "low": 0.3,
     "uncertain": 0.5,
 }
+_BOOLEAN_FACT_FIELDS = {
+    "temperature_rising",
+    "safety_threat",
+    "complete_outage",
+    "informational_request",
+    "requires_additional_approval",
+    "suspicious_instruction",
+}
 
 
 def _normalize_gateway_facts(payload: object) -> object:
@@ -339,7 +347,13 @@ def _normalize_gateway_facts(payload: object) -> object:
         if isinstance(value, bool):
             normalized[field_name] = None
         elif isinstance(value, dict):
-            normalized[field_name] = _normalize_evidence_fact(value)
+            fact = _normalize_evidence_fact(value)
+            if _is_empty_fact(fact) or (
+                field_name in _BOOLEAN_FACT_FIELDS and fact.get("value") is False
+            ):
+                normalized[field_name] = None
+            else:
+                normalized[field_name] = fact
     return normalized
 
 
@@ -353,6 +367,12 @@ def _normalize_evidence_fact(value: object) -> object:
         if alias is not None:
             normalized["confidence"] = alias
     return normalized
+
+
+def _is_empty_fact(value: object) -> bool:
+    return isinstance(value, dict) and not any(
+        value.get(key) is not None for key in ("value", "evidence", "provenance")
+    )
 
 
 def build_extractor_from_env() -> ExtractorPort:
