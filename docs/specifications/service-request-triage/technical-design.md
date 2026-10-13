@@ -735,7 +735,7 @@ Offline eval агрегирует:
 
 ### Acceptance/evals
 
-Минимальный набор:
+Размеченный набор из 16 кейсов (6 позитивных, 10 негативных) проверяет:
 
 1. полный Gold request;
 2. неоднозначная «17-я»;
@@ -748,7 +748,15 @@ Offline eval агрегирует:
 9. missing identity и CRM/text conflict;
 10. busy capacity + requested time;
 11. coverage/cost approval status;
-12. prompt injection и tool failure.
+12. prompt injection в message и attachment;
+13. informational request как P4;
+14. несколько открытых заявок;
+15. missing contract;
+16. tool timeout и controlled failure.
+
+Oracle каждого кейса включает resolved entities, точный SLA, capacity, repeat
+target/version, reason codes, глубину trace, evidence validity, draft safety и
+trace redaction.
 
 ## 24. Rollout и rollback
 

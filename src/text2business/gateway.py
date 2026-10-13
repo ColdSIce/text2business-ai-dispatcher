@@ -22,6 +22,7 @@ class GatewayConfig:
     base_url: str
     api_key: str
     model: str
+    allowed_hosts: tuple[str, ...]
     timeout_seconds: float = 15.0
 
     @classmethod
@@ -37,14 +38,38 @@ class GatewayConfig:
             )
         parsed = urlparse(base_url)
         host = (parsed.hostname or "").casefold()
-        if "openrouter" in host or host == "openrouter.ai":
-            raise GatewayError("public OpenRouter endpoints are forbidden")
-        if parsed.scheme not in {"http", "https"} or not host:
-            raise GatewayError("AI_GATEWAY_BASE_URL must be an absolute HTTP(S) URL")
-        timeout = float(os.environ.get("AI_GATEWAY_TIMEOUT_SECONDS", "15"))
+        public_providers = (
+            "openrouter.ai",
+            "openai.com",
+            "anthropic.com",
+            "generativelanguage.googleapis.com",
+        )
+        if any(host == item or host.endswith(f".{item}") for item in public_providers):
+            raise GatewayError("public model-provider endpoints are forbidden")
+        if parsed.scheme != "https" or not host:
+            raise GatewayError("AI_GATEWAY_BASE_URL must be an absolute HTTPS URL")
+        allowed_hosts = tuple(
+            item.strip().casefold().lstrip(".")
+            for item in os.environ.get("AI_GATEWAY_ALLOWED_HOSTS", "").split(",")
+            if item.strip()
+        )
+        if not allowed_hosts:
+            raise GatewayError("AI_GATEWAY_ALLOWED_HOSTS is required")
+        if not any(host == item or host.endswith(f".{item}") for item in allowed_hosts):
+            raise GatewayError("AI_GATEWAY_BASE_URL host is not allowlisted")
+        try:
+            timeout = float(os.environ.get("AI_GATEWAY_TIMEOUT_SECONDS", "15"))
+        except ValueError as exc:
+            raise GatewayError("AI_GATEWAY_TIMEOUT_SECONDS must be numeric") from exc
         if timeout <= 0:
             raise GatewayError("AI_GATEWAY_TIMEOUT_SECONDS must be positive")
-        return cls(base_url=base_url.rstrip("/"), api_key=api_key, model=model, timeout_seconds=timeout)
+        return cls(
+            base_url=base_url.rstrip("/"),
+            api_key=api_key,
+            model=model,
+            allowed_hosts=allowed_hosts,
+            timeout_seconds=timeout,
+        )
 
 
 class StructuredGatewayClient:

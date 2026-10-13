@@ -150,6 +150,10 @@ class ExtractedFacts(StrictModel):
     desired_deadline: EvidenceFact | None = None
     backup_status: EvidenceFact | None = None
     previous_contact: EvidenceFact | None = None
+    informational_request: EvidenceFact | None = Field(
+        default=None,
+        description="Explicit request for information without an operational malfunction",
+    )
     requires_additional_approval: EvidenceFact | None = None
     suspicious_instruction: EvidenceFact | None = None
 
@@ -575,6 +579,35 @@ class EvalExpectation(StrictModel):
     repeat_kind: RepeatKind | None = Field(description="Expected repeat classification when reached")
     expects_proposal: bool = Field(description="Whether one safe dry-run proposal must exist")
     terminal_state: TerminalState = Field(description="Expected final harness state")
+    resolved_customer_id: str | None = Field(
+        default=None,
+        description="Expected canonical customer, including preview resolution",
+    )
+    resolved_site_id: str | None = Field(default=None, description="Expected canonical site")
+    resolved_asset_id: str | None = Field(default=None, description="Expected canonical asset")
+    sla_kind: SlaKind | None = Field(default=None, description="Expected SLA calculation mode")
+    sla_deadline: datetime | None = Field(default=None, description="Expected exact SLA deadline")
+    capacity_feasibility: CapacityFeasibility | None = Field(
+        default=None,
+        description="Expected informational capacity result",
+    )
+    target_ticket_id: str | None = Field(
+        default=None,
+        description="Expected update target when a proposal exists",
+    )
+    proposal_expected_version: int | None = Field(
+        default=None,
+        ge=0,
+        description="Expected optimistic version when a proposal exists",
+    )
+    decision_reason_codes_contains: list[str] = Field(
+        default_factory=list,
+        description="Decision reason codes that must be present",
+    )
+    minimum_trace_steps: int = Field(default=1, ge=1, description="Minimum explainability depth")
+    evidence_valid: Literal[True] = Field(default=True, description="Evidence must validate")
+    draft_safe: Literal[True] = Field(default=True, description="Draft must not promise a visit")
+    trace_redacted: Literal[True] = Field(default=True, description="Trace must contain no raw secrets")
 
 
 class EvalCase(StrictModel):
@@ -585,6 +618,10 @@ class EvalCase(StrictModel):
     category: str = Field(min_length=1, description="Coverage group such as SLA or safety")
     polarity: Literal["positive", "negative"] = Field(
         description="Positive happy/valid flow or negative fail-safe/risk case"
+    )
+    setup: Literal["default", "missing_contract", "multiple_open", "tool_failure"] = Field(
+        default="default",
+        description="Explicit deterministic fixture/failure profile for this case",
     )
     description: str = Field(min_length=1, description="Business behavior exercised by the case")
     request: IncomingRequest = Field(description="Exact input sent to the workflow")

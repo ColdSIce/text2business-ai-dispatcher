@@ -8,10 +8,18 @@ def test_eval_dataset_is_versioned_unique_and_covers_major_risks() -> None:
     case_ids = [case.case_id for case in EVAL_DATASET.cases]
     categories = {case.category for case in EVAL_DATASET.cases}
 
-    assert EVAL_DATASET.version == "1.0.0"
-    assert len(case_ids) == 11
+    assert EVAL_DATASET.version == "2.0.0"
+    assert len(case_ids) == 16
     assert len(case_ids) == len(set(case_ids))
-    assert {"happy_path", "repeat", "sla", "priority", "identity", "security"} <= categories
+    assert {
+        "happy_path",
+        "repeat",
+        "sla",
+        "priority",
+        "identity",
+        "security",
+        "failure",
+    } <= categories
     assert {case.polarity for case in EVAL_DATASET.cases} == {"positive", "negative"}
 
 
@@ -34,10 +42,20 @@ def test_positive_and_negative_suites_are_both_executable() -> None:
     positive_runs = execute_eval_cases(positive)
     negative_runs = execute_eval_cases(negative)
 
-    assert len(positive_runs) == 5
-    assert len(negative_runs) == 6
+    assert len(positive_runs) == 6
+    assert len(negative_runs) == 10
     assert all(run.passed for run in [*positive_runs, *negative_runs])
-    no_proposal = {"ambiguous", "missing_identity", "conflict", "approval", "injection"}
+    no_proposal = {
+        "ambiguous",
+        "missing_identity",
+        "conflict",
+        "approval",
+        "injection",
+        "attachment_injection",
+        "multiple_open",
+        "missing_contract",
+        "tool_failure",
+    }
     assert all(
         run.result.proposal is None
         for run in negative_runs

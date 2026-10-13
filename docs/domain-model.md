@@ -12,7 +12,11 @@
 | Решение | `Decision`, `PriorityOverride` | Действие, готовность к review и контролируемое переопределение приоритета. |
 | Предложение | `TicketChangeProposal`, `TicketChangeProposalOutput` | Dry-run create/update; подтверждение человека обязательно. |
 | Выполнение | `RunLimits`, `RunMetadata`, `TraceEvent`, `CaseResult` | Бюджеты, terminal state, trace и полный результат. |
-| Evals | `EvalDataset`, `EvalCase`, `EvalExpectation`, `EvalAssertion`, `EvalRun` | Версионированные positive/negative кейсы, oracle, сравнения и история выполнения с trace. |
+| Evals | `EvalDataset`, `EvalCase`, `EvalExpectation`, `EvalAssertion`, `EvalRun` | Версионированные positive/negative кейсы, setup профили, полный oracle, сравнения и история выполнения с trace. |
+
+`ExtractedFacts.informational_request` отделяет консультацию от неисправности.
+Eval setup явно выбирает default fixture, missing contract, multiple open tickets
+или tool failure; это часть разметки, а не скрытая логика теста.
 
 `TicketChangeProposal` возникает только при подтверждённой CRM-идентичности, однозначных customer/site/asset, найденном договоре и безопасном решении. Для открытого повтора предлагается update с текущей версией и исходным SLA; для закрытого повтора до 30 дней — новый связанный тикет с новым SLA.
 

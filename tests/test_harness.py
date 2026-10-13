@@ -37,8 +37,7 @@ def test_harness_blocks_timeout_and_calls_after_terminal_state() -> None:
     now[0] = 2.0
     with pytest.raises(RuntimeError, match="run timeout"):
         guard.before_tool("lookup", {"id": "1"})
-    metadata = guard.finish(TerminalState.FAILED)
+    metadata = guard.finish(TerminalState.FAILED, enforce_deadline=False)
     assert metadata.elapsed_ms == 2000
     with pytest.raises(RuntimeError, match="terminal state"):
         guard.before_model("extract")
-

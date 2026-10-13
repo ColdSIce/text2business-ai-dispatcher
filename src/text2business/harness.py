@@ -8,6 +8,30 @@ from collections.abc import Callable
 from text2business.models import IncomingRequest, JsonValue, RunLimits, RunMetadata, TerminalState
 
 
+class HarnessError(RuntimeError):
+    """Controlled bounded-run failure with a stable public reason code."""
+
+    reason_code = "RUN_FAILED"
+
+
+class RunTimeoutError(HarnessError):
+    """Raised when the wall-clock budget has been exceeded."""
+
+    reason_code = "RUN_TIMEOUT"
+
+
+class RunLimitExceededError(HarnessError):
+    """Raised when a tool, model or proposal budget is exhausted."""
+
+    reason_code = "RUN_LIMIT_EXCEEDED"
+
+
+class DuplicateToolCallError(HarnessError):
+    """Raised when a repeated tool signature indicates a possible loop."""
+
+    reason_code = "DUPLICATE_TOOL_CALL"
+
+
 class HarnessGuard:
     """Per-request budgets, deadline and terminal-state guard for bounded execution."""
 
@@ -38,9 +62,14 @@ class HarnessGuard:
 
     def _check_active(self) -> None:
         if self._finished:
-            raise RuntimeError("run already reached a terminal state")
+            raise HarnessError("run already reached a terminal state")
         if self._clock() - self._started_at > self.limits.max_run_seconds:
-            raise RuntimeError("run timeout exceeded")
+            raise RunTimeoutError("run timeout exceeded")
+
+    def checkpoint(self) -> None:
+        """Verify terminal/deadline state after an external or potentially slow call."""
+
+        self._check_active()
 
     def before_tool(
         self,
@@ -53,13 +82,13 @@ class HarnessGuard:
 
         self._check_active()
         if self.tool_calls >= self.limits.max_tool_calls:
-            raise RuntimeError("tool call limit exceeded")
+            raise RunLimitExceededError("tool call limit exceeded")
         if proposal and self.proposal_calls >= self.limits.max_proposals:
-            raise RuntimeError("proposal limit exceeded")
+            raise RunLimitExceededError("proposal limit exceeded")
         canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
         signature = hashlib.sha256(f"{name}|{canonical}".encode()).hexdigest()
         if signature in self._seen_tool_signatures:
-            raise RuntimeError("duplicate tool signature detected")
+            raise DuplicateToolCallError("duplicate tool signature detected")
         self._seen_tool_signatures.add(signature)
         self.tool_calls += 1
         if proposal:
@@ -70,14 +99,21 @@ class HarnessGuard:
 
         self._check_active()
         if self.model_calls >= self.limits.max_model_calls:
-            raise RuntimeError(f"model call limit exceeded before {name}")
+            raise RunLimitExceededError(f"model call limit exceeded before {name}")
         self.model_calls += 1
 
-    def finish(self, terminal_state: TerminalState) -> RunMetadata:
+    def finish(
+        self,
+        terminal_state: TerminalState,
+        *,
+        enforce_deadline: bool = True,
+    ) -> RunMetadata:
         """Seal the run exactly once and return immutable execution metadata."""
 
         if self._finished:
-            raise RuntimeError("run already reached a terminal state")
+            raise HarnessError("run already reached a terminal state")
+        if enforce_deadline:
+            self._check_active()
         elapsed_ms = max(0, round((self._clock() - self._started_at) * 1000))
         self._finished = True
         return RunMetadata(

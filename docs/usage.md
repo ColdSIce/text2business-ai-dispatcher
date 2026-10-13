@@ -15,8 +15,8 @@ streamlit run src/text2business/app.py
 
 ## Тюнинг промптов
 
-Вкладка «Prompt Lab» позволяет выбрать кейс, изменить extraction/drafting system
-prompts и запустить выбранный кейс либо весь regression dataset. Model-run доступен
+Вкладка «Prompt Lab» позволяет выбрать кейс, изменить русские системные промпты
+извлечения и черновика ответа и запустить выбранный кейс либо весь regression dataset. Model-run доступен
 только при настроенном private AI Gateway. Override живёт в UI-сессии и сохраняется
 в истории конкретного запуска.
 
@@ -46,7 +46,10 @@ JSON содержит `facts`, `resolution`, `repeat`, `priority`, `sla`, `capac
 export AI_GATEWAY_BASE_URL=https://gateway.example/v1
 export AI_GATEWAY_API_KEY=...
 export AI_GATEWAY_MODEL=...
+export AI_GATEWAY_ALLOWED_HOSTS=gateway.example
 export TEXT2BUSINESS_EXTRACTOR=gateway
 ```
 
-Публичный OpenRouter отклоняется. Секреты в trace не записываются.
+Gateway обязан использовать HTTPS, а hostname — входить в явный allowlist.
+Публичные OpenRouter/OpenAI/Anthropic/Google endpoints отклоняются. Секреты и
+прямые контактные данные в trace редактируются.

@@ -20,8 +20,8 @@ from text2business.models import (
     PriorityOverride,
     TrustedContactIdentity,
 )
-from text2business.scenarios import EVAL_CASES, EVAL_DATASET
 from text2business.prompts import DEFAULT_DRAFTING_PROMPT, DEFAULT_EXTRACTION_PROMPT
+from text2business.scenarios import EVAL_CASES, EVAL_DATASET
 from text2business.workflow import apply_dispatcher_priority_override, run_case
 
 
@@ -42,6 +42,7 @@ def _dataset_rows(cases: list[EvalCase]) -> list[dict[str, Any]]:
             "Кейс": case.title,
             "Тип": "Позитивный" if case.polarity == "positive" else "Негативный",
             "Категория": case.category,
+            "Setup": case.setup,
             "Ожидаемое действие": case.expected.action.value,
             "Приоритет": _value(case.expected.priority),
             "Повтор": _value(case.expected.repeat_kind),
@@ -171,6 +172,15 @@ def _render_result(
         result.sla.deadline.strftime("%d.%m %H:%M %Z") if result.sla else "—",
     )
     summary[3].metric("Повтор", _value(result.repeat.kind if result.repeat else None))
+
+    st.subheader("Итоговое решение")
+    decision_left, decision_right = st.columns(2)
+    with decision_left:
+        st.metric("Автоматизация", result.decision.automation_assessment.value)
+        st.caption(result.decision.explanation)
+    with decision_right:
+        st.markdown("**Reason codes**")
+        st.code("\n".join(result.decision.reason_codes), language=None)
 
     st.subheader("Извлечённые факты и evidence")
     rows = _fact_rows(result)
@@ -485,7 +495,8 @@ def _render_prompt_lab_tab() -> None:
             st.code(
                 "export AI_GATEWAY_BASE_URL=https://gateway.example/v1\n"
                 "export AI_GATEWAY_API_KEY=...\n"
-                "export AI_GATEWAY_MODEL=...",
+                "export AI_GATEWAY_MODEL=...\n"
+                "export AI_GATEWAY_ALLOWED_HOSTS=gateway.example",
                 language="bash",
             )
             st.caption(str(exc))
@@ -511,14 +522,14 @@ def _render_prompt_lab_tab() -> None:
         st.json(case.expected.model_dump(mode="json"))
 
     extraction_prompt = st.text_area(
-        "System prompt · extraction",
+        "Системный промпт · извлечение",
         value=DEFAULT_EXTRACTION_PROMPT,
         height=210,
         key=f"extraction-prompt-{case_id}",
         help="Должен вернуть ExtractedFacts с точными evidence-цитатами.",
     )
     drafting_prompt = st.text_area(
-        "System prompt · response drafting",
+        "Системный промпт · черновик ответа",
         value=DEFAULT_DRAFTING_PROMPT,
         height=150,
         key=f"drafting-prompt-{case_id}",

@@ -38,8 +38,14 @@ def assess_priority(asset: Asset, facts: ExtractedFacts) -> PriorityAssessment:
         or facts.complete_outage
         or facts.safety_threat
     )
+    informational = bool(
+        facts.informational_request and _is_true(facts.informational_request.value)
+    )
 
-    if not has_problem:
+    if informational and not has_problem:
+        calculated = Priority.P4
+        reasons = ["INFORMATIONAL_REQUEST"]
+    elif not has_problem:
         calculated = Priority.P4
         reasons = ["INFORMATIONAL_OR_NONCRITICAL"]
     elif safety:

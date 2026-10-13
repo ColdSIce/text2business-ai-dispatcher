@@ -104,7 +104,7 @@ class DeterministicExtractor:
         problem = None
         problem_match = re.search(
             r"не запускается(?: после перезагрузки)?|полностью останов\w*|"
-            r"останов\w*(?: компрессор\w*)?|не работает|теч\w*|нужна консультация",
+            r"останов\w*(?: компрессор\w*)?|не работает|теч\w*",
             text,
             re.IGNORECASE,
         )
@@ -181,6 +181,19 @@ class DeterministicExtractor:
                 confidence=0.9,
             )
 
+        informational_request = None
+        informational_match = re.search(
+            r"нужна консультация|нужна информация|подскажите|уточните",
+            text,
+            re.IGNORECASE,
+        )
+        if informational_match and problem is None:
+            informational_request = _fact(
+                True,
+                _sentence_with(text, informational_match.group(0)),
+                confidence=0.98,
+            )
+
         approval = None
         approval_match = re.search(
             r"согласова\w+ стоимост\w*|не по договору|вне покрыти\w*",
@@ -215,6 +228,7 @@ class DeterministicExtractor:
             desired_deadline=desired_deadline,
             backup_status=backup_status,
             previous_contact=previous_contact,
+            informational_request=informational_request,
             requires_additional_approval=approval,
             suspicious_instruction=suspicious_instruction,
         )
@@ -273,7 +287,10 @@ class GatewayExtractor:
             callback("structured_extraction" if attempt == 0 else "structured_extraction_repair")
             prompt = user_payload
             if attempt:
-                prompt += f"\nPrevious output failed validation: {last_error}. Return corrected JSON only."
+                prompt += (
+                    f"\nПредыдущий ответ не прошёл валидацию: {last_error}. "
+                    "Верни только исправленный JSON."
+                )
             raw = self.client.complete_json(
                 system_prompt=self.system_prompt,
                 user_prompt=prompt,

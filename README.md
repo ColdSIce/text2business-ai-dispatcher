@@ -43,10 +43,10 @@ docker run --rm text2business-demo --scenario full
 
 ## Что реализовано
 
-- версионируемый JSON eval-dataset: 5 позитивных и 6 негативных сценариев;
+- версионируемый размеченный JSON eval-dataset: 6 позитивных и 10 негативных сценариев;
 - Streamlit Eval Console: просмотр данных, batch-run, expected vs actual и trace каждого запуска;
 - Prompt Lab для case-specific override и полного regression-run через private gateway;
-- детерминированный fallback и опциональная structured extraction через private AI Gateway;
+- русские reviewable-промпты, детерминированный fallback и опциональная structured extraction через private AI Gateway;
 - типизированные read-only инструменты над mock CRM/asset/ticket/capacity данными;
 - repeat detection для открытых и недавно закрытых тикетов;
 - правила P1–P4, Gold/Standard/Basic SLA и проверка желаемого времени по capacity;

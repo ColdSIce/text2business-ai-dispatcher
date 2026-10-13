@@ -20,7 +20,7 @@ from text2business.extractor import (
     build_extractor_from_env,
 )
 from text2business.gateway import GatewayError
-from text2business.harness import HarnessGuard
+from text2business.harness import HarnessError, HarnessGuard
 from text2business.models import (
     Action,
     Asset,
@@ -60,13 +60,19 @@ from text2business.models import (
 )
 from text2business.priority import apply_priority_override, assess_priority
 from text2business.proposal import build_ticket_change_proposal, deterministic_response
+from text2business.redaction import sanitize_trace_value
 from text2business.repeat import RepeatResolution, classify_repeat
 from text2business.repository import JsonCorporateRepository, normalize_text
 from text2business.resolution import resolve_unique_asset, resolve_unique_site
 from text2business.sla import calculate_sla
+from text2business.safety import scan_untrusted_instructions
 
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
+
+
+class ToolExecutionError(RuntimeError):
+    """Controlled failure raised by a typed repository/tool boundary."""
 
 
 def _json_dict(model: BaseModel) -> dict[str, JsonValue]:
@@ -85,8 +91,8 @@ def _trace(
             step=len(events) + 1,
             kind=kind,
             name=name,
-            input=input_data,
-            output=output_data,
+            input=sanitize_trace_value(input_data),
+            output=sanitize_trace_value(output_data),
         )
     )
 
@@ -102,7 +108,12 @@ def _call_tool(
 ) -> ModelT:
     input_data = _json_dict(payload)
     guard.before_tool(name, input_data, proposal=proposal)
-    output = function(payload)
+    try:
+        output = function(payload)
+    except Exception as exc:
+        guard.checkpoint()
+        raise ToolExecutionError(f"{name} failed: {type(exc).__name__}") from exc
+    guard.checkpoint()
     _trace(trace, TraceKind.PROPOSAL if proposal else TraceKind.TOOL, name, input_data, _json_dict(output))
     return output
 
@@ -129,14 +140,9 @@ def run_case(
 ) -> CaseResult:
     """Run one bounded triage pipeline and return exactly one typed terminal result."""
 
-    selected_extractor = extractor or build_extractor_from_env()
     selected_repository = repository or JsonCorporateRepository()
-    if drafter is not None:
-        selected_drafter = drafter
-    elif isinstance(selected_extractor, GatewayExtractor):
-        selected_drafter = GatewayResponseDrafter(selected_extractor.client)
-    else:
-        selected_drafter = DeterministicResponseDrafter()
+    selected_extractor = extractor
+    selected_drafter = drafter
 
     guard = HarnessGuard(request, limits)
     trace: list[TraceEvent] = []
@@ -157,15 +163,36 @@ def run_case(
     proposal: TicketChangeProposalOutput | None = None
     clarification_questions: list[str] = []
     warnings: list[str] = []
+    identity_verified = False
 
     def finish(
         decision: Decision,
         terminal_state: TerminalState,
         *,
         clarification: str | None = None,
+        allow_model_draft: bool = True,
+        enforce_deadline: bool = True,
     ) -> CaseResult:
         nonlocal warnings
-        effective_drafter: ResponseDrafterPort = selected_drafter
+        if not any(event.name == "final_decision" for event in trace):
+            _trace(
+                trace,
+                TraceKind.RULE,
+                "final_decision",
+                {
+                    "priority": priority.effective if priority else None,
+                    "repeat": repeat.kind if repeat else None,
+                },
+                _json_dict(decision),
+            )
+        if not allow_model_draft:
+            effective_drafter: ResponseDrafterPort = DeterministicResponseDrafter()
+        elif selected_drafter is not None:
+            effective_drafter = selected_drafter
+        elif isinstance(selected_extractor, GatewayExtractor):
+            effective_drafter = GatewayResponseDrafter(selected_extractor.client)
+        else:
+            effective_drafter = DeterministicResponseDrafter()
         if isinstance(effective_drafter, GatewayResponseDrafter) and guard.remaining_model_calls == 0:
             effective_drafter = DeterministicResponseDrafter()
             warnings.append("MODEL_BUDGET_EXHAUSTED: deterministic response template used")
@@ -180,7 +207,7 @@ def run_case(
                 clarification=clarification,
                 on_model_call=guard.before_model,
             )
-        except (GatewayError, RuntimeError):
+        except GatewayError:
             draft = deterministic_response(
                 asset,
                 site,
@@ -191,9 +218,11 @@ def run_case(
                 handed_off=True,
             )
             warnings.append("MODEL_DRAFT_FAILED: deterministic response template used")
+        if enforce_deadline:
+            guard.checkpoint()
         warnings.extend(draft.warnings)
         return CaseResult(
-            run=guard.finish(terminal_state),
+            run=guard.finish(terminal_state, enforce_deadline=enforce_deadline),
             request=request,
             facts=facts,
             customer_candidates=customer_candidates,
@@ -217,7 +246,34 @@ def run_case(
         )
 
     try:
+        suspicious = scan_untrusted_instructions(request)
+        if suspicious is not None:
+            facts = ExtractedFacts(suspicious_instruction=suspicious)
+            _trace(
+                trace,
+                TraceKind.RULE,
+                "pre_extraction_safety_scan",
+                {
+                    "message_length": len(request.text),
+                    "attachment_length": len(request.attachment_text or ""),
+                },
+                {"suspicious_instruction": suspicious.model_dump(mode="json")},
+            )
+            warnings.append("Untrusted instruction detected before model/tool execution")
+            return finish(
+                handoff_decision(
+                    "PROMPT_INJECTION_DETECTED",
+                    "Инструкции внутри клиентских данных не могут управлять системой.",
+                ),
+                TerminalState.HANDED_OFF,
+                allow_model_draft=False,
+            )
+
+        selected_extractor = selected_extractor or build_extractor_from_env()
+        if selected_drafter is None and isinstance(selected_extractor, GatewayExtractor):
+            selected_drafter = GatewayResponseDrafter(selected_extractor.client)
         facts = selected_extractor.extract(request, on_model_call=guard.before_model)
+        guard.checkpoint()
         extraction_kind = (
             TraceKind.MODEL if isinstance(selected_extractor, GatewayExtractor) else TraceKind.EXTRACTION
         )
@@ -237,6 +293,7 @@ def run_case(
                     "Инструкции внутри клиентского текста не могут управлять системой.",
                 ),
                 TerminalState.HANDED_OFF,
+                allow_model_draft=False,
             )
 
         identity = request.identity
@@ -255,37 +312,41 @@ def run_case(
             )
             customer_candidates = matches.matches
             warnings.append("Trusted CRM customer ID is required before a proposal")
-            return finish(
-                handoff_decision(
-                    "TRUSTED_IDENTITY_MISSING",
-                    "Клиента должен подтвердить диспетчер по данным CRM.",
-                ),
-                TerminalState.HANDED_OFF,
+            if len(customer_candidates) != 1:
+                return finish(
+                    handoff_decision(
+                        "TRUSTED_IDENTITY_MISSING",
+                        "Клиента нельзя однозначно подтвердить без данных CRM.",
+                    ),
+                    TerminalState.HANDED_OFF,
+                    allow_model_draft=False,
+                )
+            customer = customer_candidates[0].customer
+        else:
+            identity_verified = True
+            customer_output = _call_tool(
+                guard,
+                trace,
+                "get_customer",
+                GetCustomerInput(customer_id=identity.customer_id),
+                selected_repository.get_customer,
             )
-
-        customer_output = _call_tool(
-            guard,
-            trace,
-            "get_customer",
-            GetCustomerInput(customer_id=identity.customer_id),
-            selected_repository.get_customer,
-        )
-        customer = customer_output.customer
-        if customer is None:
-            warnings.append("Trusted CRM customer ID was not found")
-            return finish(
-                handoff_decision("CUSTOMER_NOT_FOUND", "Клиент из CRM не найден."),
-                TerminalState.HANDED_OFF,
-            )
-        if _customer_conflicts(customer, facts):
-            warnings.append("CRM identity conflicts with the customer named in text")
-            return finish(
-                handoff_decision(
-                    "CRM_TEXT_CONFLICT",
-                    "Клиент в тексте не совпадает с доверенной CRM identity.",
-                ),
-                TerminalState.HANDED_OFF,
-            )
+            customer = customer_output.customer
+            if customer is None:
+                warnings.append("Trusted CRM customer ID was not found")
+                return finish(
+                    handoff_decision("CUSTOMER_NOT_FOUND", "Клиент из CRM не найден."),
+                    TerminalState.HANDED_OFF,
+                )
+            if _customer_conflicts(customer, facts):
+                warnings.append("CRM identity conflicts with the customer named in text")
+                return finish(
+                    handoff_decision(
+                        "CRM_TEXT_CONFLICT",
+                        "Клиент в тексте не совпадает с доверенной CRM identity.",
+                    ),
+                    TerminalState.HANDED_OFF,
+                )
 
         site_query = str(facts.site_reference.value) if facts.site_reference else ""
         site_output = _call_tool(
@@ -416,13 +477,19 @@ def run_case(
             facts.requires_additional_approval
             and _fact_is_true(facts.requires_additional_approval.value)
         )
-        decision = final_decision(
-            base_action,
-            priority.effective,
-            requires_additional_approval=approval_required,
-        )
+        if not identity_verified:
+            decision = handoff_decision(
+                "TRUSTED_IDENTITY_MISSING",
+                "Расчёты предварительные; клиента должен подтвердить диспетчер по CRM.",
+            )
+        else:
+            decision = final_decision(
+                base_action,
+                priority.effective,
+                requires_additional_approval=approval_required,
+            )
 
-        if not approval_required:
+        if identity_verified and not approval_required:
             proposal_input = build_ticket_change_proposal(
                 request,
                 customer,
@@ -462,8 +529,26 @@ def run_case(
         return finish(
             handoff_decision("EXTRACTION_FAILED", "Извлечение не завершено; нужна ручная проверка."),
             TerminalState.FAILED,
+            allow_model_draft=False,
+            enforce_deadline=False,
         )
-    except (RuntimeError, ValueError) as exc:
+    except HarnessError as exc:
+        proposal = None
+        warnings.append(str(exc))
+        _trace(
+            trace,
+            TraceKind.RULE,
+            "controlled_harness_failure",
+            {},
+            {"error": type(exc).__name__, "reason_code": exc.reason_code},
+        )
+        return finish(
+            handoff_decision(exc.reason_code, "Лимит выполнения достигнут; нужна ручная проверка."),
+            TerminalState.FAILED,
+            allow_model_draft=False,
+            enforce_deadline=False,
+        )
+    except (ToolExecutionError, TimeoutError, OSError, RuntimeError, ValueError) as exc:
         proposal = None
         warnings.append(str(exc))
         _trace(
@@ -474,8 +559,10 @@ def run_case(
             {"error": type(exc).__name__},
         )
         return finish(
-            handoff_decision("RUN_FAILED", "Обработка остановлена; нужна ручная проверка."),
+            handoff_decision("TOOL_EXECUTION_FAILED", "Внешняя проверка не завершена; нужна ручная проверка."),
             TerminalState.FAILED,
+            allow_model_draft=False,
+            enforce_deadline=False,
         )
 
 

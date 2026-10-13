@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import time
 from datetime import datetime
 
 from text2business.models import (
@@ -9,6 +11,7 @@ from text2business.models import (
     PriorityOverride,
     RepeatKind,
     ReviewStatus,
+    RunLimits,
     TerminalState,
 )
 from text2business.repository import JsonCorporateRepository
@@ -128,7 +131,67 @@ def test_prompt_injection_cannot_call_corporate_tools() -> None:
     assert result.decision.action == Action.HANDOFF_TO_DISPATCHER
     assert result.proposal is None
     assert result.run.tool_calls == 0
-    assert [event.name for event in result.trace] == ["structured_extraction"]
+    assert [event.name for event in result.trace] == [
+        "pre_extraction_safety_scan",
+        "final_decision",
+    ]
+
+
+def test_attachment_injection_is_blocked_before_model_and_tools() -> None:
+    result = run_case(SCENARIOS["attachment_injection"])
+
+    assert result.facts.suspicious_instruction is not None
+    assert result.facts.suspicious_instruction.provenance.value == "attachment"
+    assert result.run.tool_calls == 0
+    assert result.run.model_calls == 0
+    assert result.proposal is None
+
+
+def test_trace_redacts_credentials_from_extracted_evidence() -> None:
+    request = SCENARIOS["full"].model_copy(
+        update={
+            "text": (
+                "СеверФуд, склад на Дмитровском шоссе, 100. "
+                "ХУ-18 не запускается, код диагностики sk-live-secret123456. "
+                "Резервная камера работает."
+            )
+        }
+    )
+
+    result = run_case(request)
+    trace_json = json.dumps(
+        [event.model_dump(mode="json") for event in result.trace],
+        ensure_ascii=False,
+    )
+
+    assert "sk-live-secret123456" not in trace_json
+    assert "[REDACTED_SECRET]" in trace_json
+
+
+def test_slow_tool_cannot_complete_after_hard_deadline() -> None:
+    class SlowProposalRepository(JsonCorporateRepository):
+        def propose_ticket_change(self, payload):  # type: ignore[no-untyped-def]
+            output = super().propose_ticket_change(payload)
+            time.sleep(0.02)
+            return output
+
+    result = run_case(
+        SCENARIOS["full"],
+        repository=SlowProposalRepository(),
+        limits=RunLimits(max_run_seconds=0.01),
+    )
+
+    assert result.run.terminal_state == TerminalState.FAILED
+    assert "RUN_TIMEOUT" in result.decision.reason_codes
+    assert result.proposal is None
+
+
+def test_informational_request_is_p4() -> None:
+    result = run_case(SCENARIOS["informational"])
+
+    assert result.facts.informational_request is not None
+    assert result.priority and result.priority.effective == Priority.P4
+    assert "INFORMATIONAL_REQUEST" in result.priority.reason_codes
 
 
 def test_runs_are_idempotent_and_fixture_is_unchanged() -> None:
