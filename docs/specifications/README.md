@@ -8,7 +8,7 @@
 
 | Фича | Статус | Следующий gate |
 |---|---|---|
-| [Триаж сервисного обращения](service-request-triage/requirements.md) | Requirements draft | Согласовать KPI времени триажа и закрыть requirements |
+| [Триаж сервисного обращения](service-request-triage/requirements.md) | Requirements approved | Подготовить и согласовать technical design |
 
 Для Codex workflow доступен как repo-specific skill
 `$text2business-feature-spec` в `.agents/skills/text2business-feature-spec/`.
