@@ -8,10 +8,14 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 
 class StrictModel(BaseModel):
+    """Base contract that rejects unknown fields instead of silently ignoring them."""
+
     model_config = ConfigDict(extra="forbid")
 
 
 class Provenance(StrEnum):
+    """Origin of a fact shown to the dispatcher."""
+
     MESSAGE = "message"
     ATTACHMENT = "attachment"
     INTERNAL_LOOKUP = "internal_lookup"
@@ -19,6 +23,8 @@ class Provenance(StrEnum):
 
 
 class TraceKind(StrEnum):
+    """Type of an explainability event in the ordered run trace."""
+
     EXTRACTION = "extraction"
     TOOL = "tool"
     RULE = "rule"
@@ -26,6 +32,8 @@ class TraceKind(StrEnum):
 
 
 class Action(StrEnum):
+    """Closed set of business outcomes produced by deterministic rules."""
+
     CREATE_NEW = "create_new"
     UPDATE_EXISTING = "update_existing"
     REQUEST_CLARIFICATION = "request_clarification"
@@ -33,12 +41,16 @@ class Action(StrEnum):
 
 
 class TerminalState(StrEnum):
+    """Final harness state; runs are never left suspended between user turns."""
+
     COMPLETED = "completed"
     NEEDS_USER_INPUT = "needs_user_input"
     HANDED_OFF = "handed_off"
 
 
 class EvidenceFact(StrictModel):
+    """One extracted value with its source fragment, confidence and provenance."""
+
     value: str | bool | float
     evidence: str
     confidence: float = Field(ge=0, le=1)
@@ -46,6 +58,8 @@ class EvidenceFact(StrictModel):
 
 
 class ExtractedFacts(StrictModel):
+    """Structured interpretation of untrusted customer text before lookups."""
+
     customer: EvidenceFact | None = None
     site: EvidenceFact | None = None
     asset: EvidenceFact | None = None
@@ -58,6 +72,8 @@ class ExtractedFacts(StrictModel):
 
 
 class IncomingRequest(StrictModel):
+    """Validated request envelope accepted by the application workflow."""
+
     channel: str
     sender: str
     received_at: datetime
@@ -73,6 +89,8 @@ class IncomingRequest(StrictModel):
 
 
 class Site(StrictModel):
+    """Customer service location from the corporate registry."""
+
     site_id: str
     customer_id: str
     customer_name: str
@@ -81,6 +99,8 @@ class Site(StrictModel):
 
 
 class Asset(StrictModel):
+    """Serviceable equipment installed at exactly one site."""
+
     asset_id: str
     site_id: str
     local_code: str
@@ -89,6 +109,8 @@ class Asset(StrictModel):
 
 
 class Contract(StrictModel):
+    """Service agreement that supplies SLA, service window and coverage."""
+
     contract_id: str
     site_id: str
     plan: str
@@ -98,6 +120,8 @@ class Contract(StrictModel):
 
 
 class Ticket(StrictModel):
+    """Existing service ticket used for deterministic duplicate detection."""
+
     ticket_id: str
     asset_id: str
     created_at: datetime
@@ -107,6 +131,8 @@ class Ticket(StrictModel):
 
 
 class CorporateData(StrictModel):
+    """Read-only aggregate loaded from the local corporate JSON fixture."""
+
     current_time: datetime
     sites: list[Site]
     assets: list[Asset]
@@ -115,57 +141,81 @@ class CorporateData(StrictModel):
 
 
 class SiteMatch(StrictModel):
+    """Candidate site plus deterministic score and explicit match reasons."""
+
     site: Site
     score: int = Field(ge=0)
     matched_by: list[str]
 
 
 class AssetMatch(StrictModel):
+    """Candidate asset plus the registry fields that matched the query."""
+
     asset: Asset
     matched_by: list[str]
 
 
 class FindSiteInput(StrictModel):
+    """Input contract for customer and site lookup."""
+
     query: str
 
 
 class FindSiteOutput(StrictModel):
+    """Output contract returning all ranked site candidates."""
+
     matches: list[SiteMatch]
 
 
 class FindAssetsInput(StrictModel):
+    """Input contract for an asset lookup restricted to one resolved site."""
+
     site_id: str
     query: str
 
 
 class FindAssetsOutput(StrictModel):
+    """Output contract returning matching assets without choosing one."""
+
     matches: list[AssetMatch]
 
 
 class GetContractInput(StrictModel):
+    """Input contract for retrieving the contract of one resolved site."""
+
     site_id: str
 
 
 class GetContractOutput(StrictModel):
+    """Output contract that explicitly represents a missing contract."""
+
     contract: Contract | None
 
 
 class FindOpenTicketsInput(StrictModel):
+    """Input contract for duplicate lookup within a confirmed business scope."""
+
     customer_id: str
     site_id: str
     asset_id: str
 
 
 class FindOpenTicketsOutput(StrictModel):
+    """Output contract returning all non-terminal matching tickets."""
+
     tickets: list[Ticket]
 
 
 class PriorityAssessment(StrictModel):
+    """Rule-derived priority and machine-readable reasons."""
+
     priority: Literal["P1", "P2", "P3", "P4"]
     reason_codes: list[str]
 
 
 class SlaAssessment(StrictModel):
+    """Rule-derived response SLA and timezone-aware deadline."""
+
     contract_id: str
     response_sla: str
     deadline: datetime
@@ -173,6 +223,8 @@ class SlaAssessment(StrictModel):
 
 
 class Decision(StrictModel):
+    """Final deterministic business decision before any mutation proposal."""
+
     action: Action
     reason_codes: list[str]
     explanation: str
@@ -180,6 +232,8 @@ class Decision(StrictModel):
 
 
 class TicketMutationInput(StrictModel):
+    """Safe proposal to create or update one ticket; live execution is impossible."""
+
     idempotency_key: str = Field(min_length=16)
     expected_version: int = Field(ge=0)
     operation: Literal[Action.CREATE_NEW, Action.UPDATE_EXISTING]
@@ -189,6 +243,8 @@ class TicketMutationInput(StrictModel):
 
 
 class TicketMutationOutput(StrictModel):
+    """Dry-run tool result confirming that only a proposal was accepted."""
+
     accepted: bool
     dry_run: Literal[True] = True
     proposal: TicketMutationInput
@@ -196,6 +252,8 @@ class TicketMutationOutput(StrictModel):
 
 
 class TraceEvent(StrictModel):
+    """Redacted, ordered evidence of extraction, tool, rule or mutation work."""
+
     step: int = Field(ge=1)
     kind: TraceKind
     name: str
@@ -204,12 +262,16 @@ class TraceEvent(StrictModel):
 
 
 class RunLimits(StrictModel):
+    """Hard local ceilings applied independently of any future model gateway."""
+
     max_tool_calls: int = Field(default=8, ge=1)
     max_model_calls: int = Field(default=2, ge=0)
     max_mutations: Literal[1] = 1
 
 
 class RunMetadata(StrictModel):
+    """Run identity, terminal state and consumed harness counters."""
+
     run_id: str
     trace_id: str
     terminal_state: TerminalState
@@ -220,6 +282,8 @@ class RunMetadata(StrictModel):
 
 
 class CaseResult(StrictModel):
+    """Complete user-visible result joining evidence, lookups, decision and trace."""
+
     run: RunMetadata
     request: IncomingRequest
     facts: ExtractedFacts

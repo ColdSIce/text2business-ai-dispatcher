@@ -14,3 +14,4 @@ LLM отвечает только за structured extraction и черновик
 
 Корпоративный JSON является read-only mock-хранилищем. Все tool inputs/outputs и итоговый результат описаны Pydantic-моделями. Реальные side effects отсутствуют.
 
+Подробный каталог полей и условий формирования mutation находится в [Сущностях и моделях](domain-model.md).

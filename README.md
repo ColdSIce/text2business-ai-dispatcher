@@ -7,6 +7,7 @@
 - [Установка](docs/installation.md)
 - [Как пользоваться](docs/usage.md)
 - [Архитектура](docs/architecture.md)
+- [Сущности и модели](docs/domain-model.md)
 - [Agent harness](docs/harness.md)
 - [Evals](docs/evals.md)
 - [Метрики](docs/metrics.md)
